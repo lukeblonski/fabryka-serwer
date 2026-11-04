@@ -1,0 +1,19 @@
+[Unit]
+Description=Sesja obserwatora fabryki (Claude Code z Remote Control w tmux)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=forking
+User=obserwator
+Group=obserwator
+WorkingDirectory=/home/obserwator/obserwator
+Environment=HOME=/home/obserwator
+ExecStart=/usr/bin/tmux new-session -d -s obserwator /usr/local/lib/fabryka-serwer/start-obserwatora.sh
+ExecStop=/usr/bin/tmux kill-session -t obserwator
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

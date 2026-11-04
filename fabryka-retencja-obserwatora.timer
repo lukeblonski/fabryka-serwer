@@ -1,0 +1,10 @@
+[Unit]
+Description=Codzienna retencja archiwum obserwatora
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=fabryka-retencja-obserwatora.service
+
+[Install]
+WantedBy=timers.target

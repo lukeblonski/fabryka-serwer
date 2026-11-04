@@ -1,0 +1,3 @@
+# Jedyna reguła sudo obserwatora: uruchomienie skryptu startowego fabryki jako konto fabryka, bez hasła.
+# Instalator kopiuje ten plik do /etc/sudoers.d/fabryka-obserwator (root:root, 0440) po visudo -c -f.
+obserwator ALL=(fabryka) NOPASSWD: /usr/local/lib/fabryka-serwer/start-fabryki.sh

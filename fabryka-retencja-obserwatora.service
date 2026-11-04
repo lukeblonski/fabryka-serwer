@@ -1,0 +1,8 @@
+[Unit]
+Description=Retencja archiwum obserwatora: usuwa pliki archiwum starsze niż 365 dni (notatki zostają)
+
+[Service]
+Type=oneshot
+User=obserwator
+Group=obserwator
+ExecStart=/usr/bin/find /home/obserwator/obserwator/archiwum -type f -mtime +365 -delete
