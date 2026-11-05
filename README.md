@@ -29,14 +29,14 @@ Ponowne uruchomienie jest bezpieczne. Skrypt pomija to, co już działa, i nie p
 Otwórz terminal w przeglądarce w panelu Hostingera (konto `root`) i wklej jedno polecenie:
 
 ```bash
-f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/lukeblonski/fabryka-serwer/v1.0.0/instaluj.sh -o "$f" && echo "ee1ff258d615ec0fd7147267a38a34afa7d6299891e78a8ea3d68d521dcf2039  $f" | sha256sum -c - && bash "$f"
+f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/lukeblonski/fabryka-serwer/v1.0.1/instaluj.sh -o "$f" && echo "94b283a2987af2862eabfe0d16fa74169b9bb12e26edb4420aa4b5715d2c45ab  $f" | sha256sum -c - && bash "$f"
 ```
 
-Polecenie pobiera oznaczoną wersję `v1.0.0`, a nie główną gałąź, i uruchamia skrypt dopiero wtedy, gdy jego suma SHA-256 zgadza się z sumą w poleceniu. Skrypt tak samo sprawdza każdy plik, który pobiera. Polecenie do wklejenia podaje sesja główna fabryki z commitu laboratorium, z którego wydano tę wersję; nie kopiuj go ze strony repozytorium.
+Polecenie pobiera oznaczoną wersję `v1.0.1`, a nie główną gałąź, i uruchamia skrypt dopiero wtedy, gdy jego suma SHA-256 zgadza się z sumą w poleceniu. Polecenie do wklejenia weź od osoby, która dała Ci tę wersję; nie kopiuj go ze strony głównej repozytorium.
 
 ## Logowania
 
-Skrypt prosi o trzy logowania po kolei: Claude obserwatora, Claude fabryki i GitHub fabryki. Każde pokazuje adres do otwarcia w przeglądarce. Po zalogowaniu strona pokazuje kod; wklej go w terminal i naciśnij Enter. Kody i tokeny nie trafiają do dziennika instalatora (`/var/log/fabryka-instalator.log`) ani do historii poleceń.
+Skrypt prosi o trzy logowania po kolei: Claude obserwatora, Claude fabryki i GitHub fabryki. Oba logowania Claude pokazują adres do otwarcia w przeglądarce. Po zalogowaniu strona pokazuje kod; wklej go w terminal i naciśnij Enter. Logowanie GitHub działa odwrotnie: terminal pokazuje kod, który wpisujesz na stronie github.com/login/device. Kody i tokeny nie trafiają do dziennika instalatora (`/var/log/fabryka-instalator.log`) ani do historii poleceń.
 
 Przy pierwszym starcie sesja obserwatora może raz zapytać o Remote Control. Skrypt wtedy pokaże ekran sesji i polecenie `sudo -u obserwator tmux attach -t obserwator`. Wpisz `y` i Enter, a potem naciśnij Ctrl-b i d, żeby wrócić do instalatora.
 

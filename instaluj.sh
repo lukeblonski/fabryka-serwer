@@ -12,18 +12,19 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.0"
+WERSJA="v1.0.1"
 
-# Pliki pobierane z repozytorium instalatora w wersji WERSJA i ich sumy SHA-256 (po jednej na plik).
-# Niezgodna suma kończy instalator kodem 1, zanim cokolwiek się zmieni.
+# Pliki pobierane z repozytorium instalatora w wersji WERSJA. Adres wskazuje tag pełną nazwą refs/tags/,
+# żeby gałąź o tej samej nazwie go nie przesłoniła; pliki tagu chroni niezmienne wydanie.
+# Nieudane pobranie kończy instalator kodem 1, zanim cokolwiek się zmieni.
 PLIKI=(
-  "sudoers-obserwator d1b8fdea09c028141e660073c7f40301ce5cb812a234a5004b1c4b3051f179ea"
-  "start-fabryki.sh 3aa1a0959a9485345466320313218ddbdc4c222e1772151493e1cb4c52fc2589"
-  "start-obserwatora.sh 602b9430abdf0f47ceaf0293621af6010c8716b58002d88eb2fa66112ba8d233"
-  "obserwator.service 71b6b4b02b415232a320f7b182ea4f99aca9e7fb2d11d86f3c2c976ad212479e"
-  "fabryka-retencja-obserwatora.service 601321ac05c5a8b019f870f694630ef2cea189844b2848d8ab90d34a79452c46"
-  "fabryka-retencja-obserwatora.timer 9f8c6d6219fe96d80f360b107ded3a5d17d3be15ef1fae8f8a2eb278a5615514"
-  "obserwator/CLAUDE.md 87f76b8fcb8b81c8cc71cd37f31c91bd92787240c0094bd58bff793ed4609275"
+  "sudoers-obserwator"
+  "start-fabryki.sh"
+  "start-obserwatora.sh"
+  "obserwator.service"
+  "fabryka-retencja-obserwatora.service"
+  "fabryka-retencja-obserwatora.timer"
+  "obserwator/CLAUDE.md"
 )
 
 LIB=/usr/local/lib/fabryka-serwer
@@ -101,18 +102,13 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 POBRANE="$TMP/pliki"
 
-# --- pobranie plików instalatora z tagu i sprawdzenie sum (przed każdą zmianą) -----------------------------
+# --- pobranie plików instalatora z tagu (przed każdą zmianą) ------------------------------------------------
 
-echo "Pobieram pliki instalatora w wersji $WERSJA i sprawdzam ich sumy SHA-256."
-for wpis in "${PLIKI[@]}"; do
-  plik=${wpis% *}
-  suma=${wpis##* }
+echo "Pobieram pliki instalatora w wersji $WERSJA."
+for plik in "${PLIKI[@]}"; do
   mkdir -p "$POBRANE/$(dirname "$plik")"
-  if ! curl -fsSL "https://raw.githubusercontent.com/${REPO}/${WERSJA}/${plik}" -o "$POBRANE/$plik"; then
+  if ! curl -fsSL "https://raw.githubusercontent.com/${REPO}/refs/tags/${WERSJA}/${plik}" -o "$POBRANE/$plik"; then
     przerwij "Nie mogę pobrać pliku $plik w wersji $WERSJA. Niczego nie zmieniono; sprawdź sieć i uruchom ponownie."
-  fi
-  if ! printf '%s  %s\n' "$suma" "$POBRANE/$plik" | sha256sum -c - > /dev/null 2>&1; then
-    przerwij "Suma SHA-256 pliku $plik w wersji $WERSJA nie zgadza się z sumą w instalatorze. Niczego nie zmieniono."
   fi
 done
 
@@ -120,7 +116,7 @@ touch "$LOG"
 chmod 0600 "$LOG"
 LOG_GOTOWY=1
 napisz "=== Instalator fabryki $WERSJA, $(date -Is) ==="
-gotowe "pliki instalatora pobrane, sumy SHA-256 zgodne"
+gotowe "pliki instalatora w wersji $WERSJA pobrane"
 
 # --- pomocnicze --------------------------------------------------------------------------------------------
 
@@ -423,9 +419,9 @@ if zainstaluj_plik "$POBRANE/obserwator.service" "$JEDNOSTKI/obserwator.service"
 fi
 systemctl enable obserwator.service > /dev/null 2>&1 || przerwij "Nie mogę włączyć usługi obserwator.service."
 if [ "$ZMIANA_USLUGI" -eq 1 ] && systemctl is-active --quiet obserwator.service; then
-  systemctl restart obserwator.service
+  systemctl restart obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
 else
-  systemctl start obserwator.service
+  systemctl start obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
 fi
 
 ekran_obserwatora() {
