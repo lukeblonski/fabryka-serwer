@@ -8,11 +8,11 @@ set -euo pipefail
 # Zasada bezpieczeństwa: root nie otwiera żadnej ścieżki pod /home/. Pliki kont czyta i zapisuje
 # konto właściciela (sudo -u <konto> tee, cmp -, cp, mkdir, git, jq), a treść przychodzi przez
 # standardowe wejście z folderu tymczasowego roota. Root zmienia tylko pliki systemu
-# (/etc, /usr/local/lib/fabryka-serwer, /var/log) i tryby samych katalogów domowych.
+# (/etc, /usr/local/lib/fabryka-serwer, /var/lib/fabryka-serwer, /var/log) i tryby samych katalogów domowych.
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.1"
+WERSJA="v1.0.2"
 
 # Pliki pobierane z repozytorium instalatora w wersji WERSJA. Adres wskazuje tag pełną nazwą refs/tags/,
 # żeby gałąź o tej samej nazwie go nie przesłoniła; pliki tagu chroni niezmienne wydanie.
@@ -20,6 +20,7 @@ WERSJA="v1.0.1"
 PLIKI=(
   "sudoers-obserwator"
   "start-fabryki.sh"
+  "skrzynka.py"
   "start-obserwatora.sh"
   "obserwator.service"
   "fabryka-retencja-obserwatora.service"
@@ -28,6 +29,11 @@ PLIKI=(
 )
 
 LIB=/usr/local/lib/fabryka-serwer
+# Foldery poleceń obserwatora: skrzynkę i zaufane pola pisze tylko obserwator, wyniki tylko fabryka.
+SERWER=/var/lib/fabryka-serwer
+SKRZYNKA="$SERWER/skrzynka"
+ZAUFANE="$SERWER/zaufane"
+WYNIKI="$SERWER/wyniki"
 JEDNOSTKI=/etc/systemd/system
 SUDOERS_CEL=/etc/sudoers.d/fabryka-obserwator
 APPARMOR_ROOTLESSKIT=/etc/apparmor.d/usr.bin.rootlesskit
@@ -222,17 +228,21 @@ for grupa in sudo docker; do
 done
 zakres_podrzedny /etc/subuid --add-subuids
 zakres_podrzedny /etc/subgid --add-subgids
-# umask 022 konta fabryka w jednym miejscu: pam_umask czyta "umask=" z pola GECOS przed ustawieniami
-# z /etc/login.defs (USERGROUPS_ENAB daje 002), więc każda sesja PAM konta (sudo -u fabryka, menedżer
-# użytkownika, logowanie) tworzy pliki bez zapisu dla grupy fabryka, w której jest obserwator.
-case "$(getent passwd fabryka | cut -d: -f5)" in
-  *umask=022*) ;;
-  *) chfn -o umask=022 fabryka ;;
-esac
-gotowe "tryby katalogów domowych, grupy, umask konta fabryka i zakresy podrzędnych identyfikatorów ustawione"
+# umask 022 kont fabryka i obserwator w jednym miejscu: pam_umask czyta "umask=" z pola GECOS przed
+# ustawieniami z /etc/login.defs (USERGROUPS_ENAB daje 002), więc każda sesja PAM konta (sudo -u, menedżer
+# użytkownika, logowanie) tworzy pliki bez zapisu dla grupy. Fabryka nie daje zapisu grupie fabryka,
+# w której jest obserwator; obserwator nie daje grupie fabryka zapisu w skrzynce i folderze zaufanych pól.
+for konto in fabryka obserwator; do
+  case "$(getent passwd "$konto" | cut -d: -f5)" in
+    *umask=022*) ;;
+    *) chfn -o umask=022 "$konto" ;;
+  esac
+done
+gotowe "tryby katalogów domowych, grupy, umask kont fabryka i obserwator i zakresy podrzędnych identyfikatorów ustawione"
 
 install -d -m 0755 -o root -g root "$LIB"
 zainstaluj_plik "$POBRANE/start-fabryki.sh" "$LIB/start-fabryki.sh" 0755 || true
+zainstaluj_plik "$POBRANE/skrzynka.py" "$LIB/skrzynka.py" 0755 || true
 zainstaluj_plik "$POBRANE/start-obserwatora.sh" "$LIB/start-obserwatora.sh" 0755 || true
 
 if ! visudo -c -f "$POBRANE/sudoers-obserwator" > /dev/null; then
@@ -243,6 +253,20 @@ if ! visudo -c > /dev/null; then
   przerwij "Konfiguracja sudo nie przechodzi visudo -c po dodaniu reguły obserwatora."
 fi
 gotowe "skrypty startowe i reguła sudo obserwatora zainstalowane"
+
+# folder_systemu <folder> <właściciel:grupa> <tryb>: folder systemu zakłada i poprawia root.
+folder_systemu() {
+  install -d -m "$3" -o "${2%%:*}" -g "${2##*:}" "$1" || przerwij "Nie mogę założyć folderu $1."
+  chown "$2" "$1" || przerwij "Nie mogę ustawić właściciela $1."
+  chmod "$3" "$1" || przerwij "Nie mogę ustawić trybu $1."
+}
+# Skrzynkę i zaufane pola pisze tylko obserwator, a fabryka czyta przez grupę (setgid: nowe pliki dostają
+# grupę fabryka). Wyniki pisze tylko fabryka, a obserwator czyta przez grupę fabryka.
+folder_systemu "$SERWER" root:root 0755
+folder_systemu "$SKRZYNKA" obserwator:fabryka 2750
+folder_systemu "$ZAUFANE" obserwator:fabryka 2750
+folder_systemu "$WYNIKI" fabryka:fabryka 0750
+gotowe "foldery $SKRZYNKA, $ZAUFANE i $WYNIKI założone"
 
 # --- 3. Claude Code --------------------------------------------------------------------------------------
 
@@ -376,17 +400,26 @@ else
   gotowe "umowa obserwatora zapisana"
 fi
 
+# Folder serwera do odczytu i zapis narzędziami plikowymi tylko w skrzynce i folderze zaufanych pól;
+# inne wpisy permissions zostają, nowe dochodzą bez duplikatów.
+ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$ZAUFANE")
 WARUNEK_USTAWIEN='.cleanupPeriodDays == 365 and .autoMemoryDirectory == $notatki
-  and .inputNeededNotifEnabled == true and .agentPushNotifEnabled == true and .remoteControlAtStartup == true'
+  and .inputNeededNotifEnabled == true and .agentPushNotifEnabled == true and .remoteControlAtStartup == true
+  and ([$serwer] - (.permissions.additionalDirectories // []) | length == 0)
+  and (["Edit(/\($skrzynka)/**)", "Edit(/\($zaufane)/**)"] - (.permissions.allow // []) | length == 0)'
 FILTR_USTAWIEN='. + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
-  inputNeededNotifEnabled: true, agentPushNotifEnabled: true, remoteControlAtStartup: true}'
+  inputNeededNotifEnabled: true, agentPushNotifEnabled: true, remoteControlAtStartup: true}
+  | .permissions = (.permissions // {})
+  | .permissions.additionalDirectories = ((.permissions.additionalDirectories // []) as $a | $a + ([$serwer] - $a))
+  | .permissions.allow = ((.permissions.allow // []) as $a
+      | $a + (["Edit(/\($skrzynka)/**)", "Edit(/\($zaufane)/**)"] - $a))'
 if ! sudo -u obserwator test -s "$OBS_SETTINGS"; then
   printf '{}\n' | sudo -u obserwator tee "$OBS_SETTINGS" > /dev/null
 fi
-if sudo -u obserwator jq -e --arg notatki "$NOTATKI" "$WARUNEK_USTAWIEN" "$OBS_SETTINGS" > /dev/null 2>&1; then
+if sudo -u obserwator jq -e "${ARGI_USTAWIEN[@]}" "$WARUNEK_USTAWIEN" "$OBS_SETTINGS" > /dev/null 2>&1; then
   gotowe "ustawienia Claude Code obserwatora już są"
 else
-  if ! sudo -u obserwator jq --arg notatki "$NOTATKI" "$FILTR_USTAWIEN" "$OBS_SETTINGS" > "$TMP/settings.json"; then
+  if ! sudo -u obserwator jq "${ARGI_USTAWIEN[@]}" "$FILTR_USTAWIEN" "$OBS_SETTINGS" > "$TMP/settings.json"; then
     przerwij "Ustawienia Claude Code obserwatora (.claude/settings.json) nie są poprawnym JSON-em."
   fi
   sudo -u obserwator tee "$OBS_SETTINGS" < "$TMP/settings.json" > /dev/null
@@ -576,8 +609,45 @@ umowa_rowna_wzorowi() {
 }
 
 ustawienia_obserwatora() {
-  sudo -u obserwator jq -e --arg notatki "$NOTATKI" "$WARUNEK_USTAWIEN" "$OBS_SETTINGS" > /dev/null \
+  sudo -u obserwator jq -e "${ARGI_USTAWIEN[@]}" "$WARUNEK_USTAWIEN" "$OBS_SETTINGS" > /dev/null \
     && sudo -u obserwator jq -e --arg folder "$OBS_DIR" "$WARUNEK_STANU" "$OBS_STAN" > /dev/null
+}
+
+# tylko_obserwator_pisze <folder>: dodatni sygnał czterech warunków. Obserwator tworzy plik próbny, fabryka
+# nie tworzy nowego pliku, nie dopisuje do próbnego i nie usuwa go, obserwator go usuwa. Kod 0 tylko, gdy
+# zachodzą wszystkie cztery; plik, który fabryka wbrew oczekiwaniu zapisała, sprząta root.
+tylko_obserwator_pisze() {
+  local folder="$1" wynik=0
+  local probny="$folder/.proba-obserwatora-$$" nowy="$folder/.proba-fabryki-$$"
+  if ! sudo -u obserwator touch "$probny" 2> /dev/null; then
+    return 1
+  fi
+  if sudo -u fabryka touch "$nowy" 2> /dev/null; then
+    wynik=1
+    rm -f "$nowy"
+  fi
+  if sudo -u fabryka tee -a "$probny" < /dev/null > /dev/null 2>&1; then
+    wynik=1
+  fi
+  sudo -u fabryka rm -f "$probny" 2> /dev/null || true
+  if ! sudo -u obserwator test -e "$probny"; then
+    wynik=1
+  fi
+  if ! sudo -u obserwator rm "$probny" 2> /dev/null; then
+    wynik=1
+    rm -f "$probny"
+  fi
+  return "$wynik"
+}
+
+umask_kont() {
+  local konto
+  for konto in fabryka obserwator; do
+    case "$(getent passwd "$konto" | cut -d: -f5)" in
+      *umask=022*) ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 sprawdz "konto fabryka nie czyta i nie zmienia katalogu obserwatora" \
@@ -604,6 +674,11 @@ sprawdz "zadanie retencji archiwum włączone" "systemctl list-timers fabryka-re
   systemctl is-active --quiet fabryka-retencja-obserwatora.timer
 sprawdz "proces remote-control obserwatora działa i nie czeka na pytanie (y/n)" \
   "sudo -u obserwator tmux attach -t obserwator (odpowiedz y, wyjście: Ctrl-b, potem d)" remote_control_obserwatora
+sprawdz "umask 022 kont fabryka i obserwator" "pole GECOS: getent passwd fabryka obserwator" umask_kont
+sprawdz "skrzynkę pisze i czyści tylko obserwator, fabryka nie zapisuje ani nie usuwa" \
+  "właściciel obserwator:fabryka i tryb 2750 folderu $SKRZYNKA (ls -ld $SKRZYNKA)" tylko_obserwator_pisze "$SKRZYNKA"
+sprawdz "zaufane pola pisze i czyści tylko obserwator, fabryka nie zapisuje ani nie usuwa" \
+  "właściciel obserwator:fabryka i tryb 2750 folderu $ZAUFANE (ls -ld $ZAUFANE)" tylko_obserwator_pisze "$ZAUFANE"
 sprawdz "obserwator uruchamia skrypt startowy fabryki" "plik $SUDOERS_CEL i $LIB/start-fabryki.sh" \
   sudo -u obserwator sudo -n -u fabryka "$LIB/start-fabryki.sh"
 
