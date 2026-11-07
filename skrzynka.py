@@ -8,7 +8,9 @@ start-fabryki.sh jako konto fabryka:
     python3 skrzynka.py wykonaj <id polecenia>   praca polecenia; zawsze kończy się plikiem WYNIKI/<id>.json
 
 Polecenie to jeden plik JSON SKRZYNKA/<id>.json, który pisze tylko konto obserwator. Rodzaje: intencja,
-autopilot, odpowiedz, przyjecie. Treść polecenia przechodzi do wykonawcy laboratorium tylko jako dane:
+autopilot, odpowiedz, przyjecie, start. Pole zmiana wskazuje zmianę laboratorium; pole projekt wskazuje projekt
+aplikacji w folderze PROJEKTY: start go rozpoczyna, a autopilot, odpowiedz i przyjecie z polem projekt działają
+na przebiegu startu tego projektu. Treść polecenia przechodzi do wykonawcy laboratorium tylko jako dane:
 kopia sprawdzonych bajtów w WYNIKI/<id>.polecenie.json i lista argumentów, bez powłoki.
 
 Foldery i konto są stałymi modułu; testy podmieniają je w procesie. Plik nie czyta zmiennych środowiska
@@ -31,10 +33,11 @@ SKRZYNKA = "/var/lib/fabryka-serwer/skrzynka"
 WYNIKI = "/var/lib/fabryka-serwer/wyniki"
 DOM = "/home/fabryka"
 LAB = "/home/fabryka/fabryka"
+PROJEKTY = DOM + "/projekty"
 WYKONAWCA = LAB + "/scripts/wykonaj_polecenie.py"
 OBSERWATOR = "obserwator"
 
-RODZAJE = ("intencja", "autopilot", "odpowiedz", "przyjecie")
+RODZAJE = ("intencja", "autopilot", "odpowiedz", "przyjecie", "start")
 # Sześć rodzajów pytań z docs/zasady-budowy.md, punkt 6.
 RODZAJE_PYTAN = ("spór recenzenta z autorem", "eskalacja", "płatny przebieg", "zakres", "kryterium", "inne")
 ROZSTRZYGNAL = ("człowiek", "obserwator")
@@ -46,12 +49,22 @@ ZMIANA = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 MAKS_PLIK = 64 * 1024
 MAKS_TRESC = 20000
 
-# rodzaj -> (pola wymagane, pola opcjonalne) poza "rodzaj" i "zmiana"
+# rodzaj -> (pola wymagane, pola opcjonalne) poza "rodzaj" i polami z CEL
 POLA = {
     "intencja": ({"tresc"}, set()),
     "autopilot": (set(), set()),
     "odpowiedz": ({"tresc", "rozstrzygnal", "pytania"}, set()),
     "przyjecie": ({"rozstrzygnal"}, {"tresc", "pytania"}),
+    "start": ({"projekt", "tresc"}, set()),
+}
+# rodzaj -> pola, z których polecenie ma dokładnie jedno: zmiana (laboratorium) albo projekt (przebieg startu
+# projektu). Para projekt + zmiana to zmiany w repo aplikacji, które przyjdą w kroku 2.
+CEL = {
+    "intencja": ("zmiana",),
+    "autopilot": ("zmiana", "projekt"),
+    "odpowiedz": ("zmiana", "projekt"),
+    "przyjecie": ("zmiana", "projekt"),
+    "start": (),
 }
 
 KOD_ODMOWA = 2
@@ -102,16 +115,23 @@ def problemy(dane):
     if not isinstance(rodzaj, str) or rodzaj not in RODZAJE:
         return [f"rodzaj spoza listy {', '.join(RODZAJE)}: {rodzaj!r}"]
     wymagane, opcjonalne = POLA[rodzaj]
-    wymagane = wymagane | {"rodzaj", "zmiana"}
+    wymagane = wymagane | {"rodzaj"}
+    cele = CEL[rodzaj]
     wynik = []
-    for pole in sorted(set(dane) - wymagane - opcjonalne):
+    for pole in sorted(set(dane) - wymagane - opcjonalne - set(cele)):
         wynik.append(f"pole spoza listy dla rodzaju {rodzaj}: {pole}")
     for pole in sorted(wymagane - set(dane)):
         wynik.append(f"brak pola {pole} dla rodzaju {rodzaj}")
+    obecne = [pole for pole in cele if pole in dane]
+    if cele and not obecne:
+        wynik.append(f"brak pola {cele[0]} dla rodzaju {rodzaj}")
+    elif len(obecne) > 1:
+        wynik.append(f"pola {' i '.join(obecne)} razem: zmiany w projekcie przyjdą w kroku 2")
 
-    zmiana = dane.get("zmiana")
-    if "zmiana" in dane and not (isinstance(zmiana, str) and ZMIANA.fullmatch(zmiana)):
-        wynik.append(f"zmiana nie pasuje do wzorca {ZMIANA.pattern}: {zmiana!r}")
+    for pole in ("zmiana", "projekt"):
+        wartosc = dane.get(pole)
+        if pole in dane and not (isinstance(wartosc, str) and ZMIANA.fullmatch(wartosc)):
+            wynik.append(f"{pole} nie pasuje do wzorca {ZMIANA.pattern}: {wartosc!r}")
     if "tresc" in dane:
         tresc = dane["tresc"]
         if not isinstance(tresc, str) or tresc.strip() == "":
@@ -165,6 +185,25 @@ def problem_wolnego(id_polecenia):
     return None
 
 
+def problem_projektu(dane):
+    """Powód odmowy dla folderu projektu poprawnego polecenia z polem projekt; inaczej None.
+
+    start: odmowa, gdy PROJEKTY jest dowiązaniem albo PROJEKTY/<projekt> już istnieje (także jako dowiązanie).
+    Inny rodzaj: odmowa, gdy PROJEKTY/<projekt> jest dowiązaniem albo nie jest folderem."""
+    if "projekt" not in dane:
+        return None
+    folder = os.path.join(PROJEKTY, dane["projekt"])
+    if dane["rodzaj"] == "start":
+        if os.path.islink(PROJEKTY):
+            return f"folder projektów {PROJEKTY} jest dowiązaniem"
+        if os.path.lexists(folder):
+            return f"projekt {dane['projekt']} już istnieje: jest {folder}"
+        return None
+    if os.path.islink(folder) or not os.path.isdir(folder):
+        return f"nie ma folderu projektu {folder} (albo jest dowiązaniem)"
+    return None
+
+
 def przeczytaj_polecenie(id_polecenia):
     """(bajty, dane, None) dla poprawnego pliku SKRZYNKA/<id>.json albo (None, None, powód)."""
     sciezka = os.path.join(SKRZYNKA, id_polecenia + ".json")
@@ -207,7 +246,9 @@ def sprawdz(id_polecenia):
     if not poprawny_id(id_polecenia):
         print(f"skrzynka.py: identyfikator nie pasuje do wzorca {ID.pattern}: {id_polecenia!r}", file=sys.stderr)
         return KOD_ODMOWA
-    _bajty, _dane, powod = przeczytaj_polecenie(id_polecenia)
+    _bajty, dane, powod = przeczytaj_polecenie(id_polecenia)
+    if powod is None:
+        powod = problem_projektu(dane)
     if powod is None:
         powod = problem_wolnego(id_polecenia)
     if powod:
@@ -292,7 +333,13 @@ def wykonaj(id_polecenia):
         if powod:
             wynik.update(kod=KOD_ODMOWA, odmowa=powod)
             return KOD_ODMOWA
-        wynik.update(rodzaj=dane["rodzaj"], zmiana=dane["zmiana"])
+        wynik.update(rodzaj=dane["rodzaj"], zmiana=dane.get("zmiana"))
+        if "projekt" in dane:
+            wynik["projekt"] = dane["projekt"]
+        powod = problem_projektu(dane)
+        if powod:
+            wynik.update(kod=KOD_ODMOWA, odmowa=powod)
+            return KOD_ODMOWA
 
         blokada = os.open(os.path.join(WYNIKI, ".zajete"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o640)
         try:

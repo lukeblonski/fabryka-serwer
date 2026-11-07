@@ -12,7 +12,12 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.2"
+WERSJA="v1.0.3"
+
+# gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
+# archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
+GITLEAKS_WERSJA="8.30.1"
+GITLEAKS_SUMA="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 
 # Pliki pobierane z repozytorium instalatora w wersji WERSJA. Adres wskazuje tag pełną nazwą refs/tags/,
 # żeby gałąź o tej samej nazwie go nie przesłoniła; pliki tagu chroni niezmienne wydanie.
@@ -171,7 +176,7 @@ export DEBIAN_FRONTEND=noninteractive
 APT_CZEKAJ=(-o DPkg::Lock::Timeout=600)
 napisz "  Gdy system sam instaluje aktualizacje, apt czeka na nie do 10 minut."
 apt-get "${APT_CZEKAJ[@]}" update -q
-apt-get "${APT_CZEKAJ[@]}" install -y -q ca-certificates curl git jq tmux uidmap dbus-user-session
+apt-get "${APT_CZEKAJ[@]}" install -y -q ca-certificates curl git jq tmux uidmap dbus-user-session nodejs npm
 
 ARCH=$(dpkg --print-architecture)
 KOD_UBUNTU=$(. /etc/os-release && printf '%s' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
@@ -201,6 +206,27 @@ apt-get "${APT_CZEKAJ[@]}" install -y -q gh docker-ce docker-ce-cli containerd.i
 systemctl disable --now docker.service docker.socket > /dev/null 2>&1 || true
 rm -f /var/run/docker.sock
 gotowe "pakiety, GitHub CLI i Docker zainstalowane; demon Dockera roota wyłączony"
+
+# gitleaks: archiwum z wydania na GitHubie, suma SHA-256 sprawdzona przed instalacją; tylko amd64 (suma dotyczy linux_x64).
+if [ "$ARCH" = "amd64" ]; then
+  if /usr/local/bin/gitleaks version 2> /dev/null | grep -qF "$GITLEAKS_WERSJA"; then
+    gotowe "gitleaks $GITLEAKS_WERSJA już jest"
+  else
+    GITLEAKS_ARCHIWUM="$TMP/gitleaks_${GITLEAKS_WERSJA}_linux_x64.tar.gz"
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_WERSJA}/gitleaks_${GITLEAKS_WERSJA}_linux_x64.tar.gz" \
+      -o "$GITLEAKS_ARCHIWUM" || przerwij "Nie mogę pobrać gitleaks $GITLEAKS_WERSJA; sprawdź sieć i uruchom ponownie."
+    if ! echo "$GITLEAKS_SUMA  $GITLEAKS_ARCHIWUM" | sha256sum -c - > /dev/null 2>&1; then
+      przerwij "Suma SHA-256 pobranego gitleaks $GITLEAKS_WERSJA nie zgadza się z sumą w instalatorze. Niczego nie zainstalowano."
+    fi
+    mkdir -p "$TMP/gitleaks"
+    tar -xzf "$GITLEAKS_ARCHIWUM" -C "$TMP/gitleaks" gitleaks || przerwij "Nie mogę rozpakować gitleaks $GITLEAKS_WERSJA."
+    install -m 0755 -o root -g root "$TMP/gitleaks/gitleaks" /usr/local/bin/gitleaks \
+      || przerwij "Nie mogę zapisać /usr/local/bin/gitleaks."
+    gotowe "gitleaks $GITLEAKS_WERSJA zainstalowany (suma SHA-256 zgodna)"
+  fi
+else
+  napisz "  Uwaga: gitleaks $GITLEAKS_WERSJA instaluję tylko na amd64, a ten serwer to $ARCH. Pomijam gitleaks."
+fi
 
 # --- 2. konta, grupy i reguła sudo -------------------------------------------------------------------------
 
@@ -640,6 +666,15 @@ tylko_obserwator_pisze() {
   return "$wynik"
 }
 
+gitleaks_w_wersji_szablonu() {
+  local wynik
+  wynik=$(sudo -u fabryka gitleaks version 2>&1) || return 1
+  case "$wynik" in
+    *"$GITLEAKS_WERSJA"*) return 0 ;;
+  esac
+  return 1
+}
+
 umask_kont() {
   local konto
   for konto in fabryka obserwator; do
@@ -665,6 +700,12 @@ sprawdz "Claude fabryki zalogowany" "uruchom instalator ponownie i zaloguj konto
   sudo -u fabryka "$FAB_CLAUDE" auth status
 sprawdz "GitHub fabryki zalogowany" "sudo -u fabryka gh auth status" sudo -u fabryka gh auth status
 sprawdz "Docker bez roota na koncie fabryka" "systemctl --user status docker na koncie fabryka" docker_bez_roota
+sprawdz "node dla konta fabryka" "sudo -u fabryka node --version i pakiet nodejs (apt-get install nodejs)" \
+  sudo -u fabryka node --version
+sprawdz "npm dla konta fabryka" "sudo -u fabryka npm --version i pakiet npm (apt-get install npm)" \
+  sudo -u fabryka npm --version
+sprawdz "gitleaks w wersji z szablonu CI ($GITLEAKS_WERSJA)" \
+  "sudo -u fabryka gitleaks version i plik /usr/local/bin/gitleaks" gitleaks_w_wersji_szablonu
 sprawdz "laboratorium sklonowane" "folder $LAB_DIR" klon_laboratorium
 sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
 sprawdz "ustawienia Claude Code obserwatora" "pliki $OBS_SETTINGS i $OBS_STAN" ustawienia_obserwatora

@@ -9,7 +9,7 @@ set -euo pipefail
 #
 # Z jednym argumentem <id polecenia> (wzorzec RRRRMMDD-GGMMSS-xxxx): wykonuje polecenie obserwatora
 # z pliku /var/lib/fabryka-serwer/skrzynka/<id>.json. Rodzaje poleceń: intencja, autopilot, odpowiedz,
-# przyjecie. Sprawdzenie (rodzaj, format, właściciel i prawa pliku) robi skrzynka.py sprawdz, zanim
+# przyjecie, start. Sprawdzenie (rodzaj, format, właściciel i prawa pliku) robi skrzynka.py sprawdz, zanim
 # cokolwiek ruszy; pracę uruchamia skrzynka.py wykonaj w usłudze systemd-run --user konta fabryka i skrypt
 # wraca od razu. Koniec pracy to zawsze plik /var/lib/fabryka-serwer/wyniki/<id>.json.
 # Kod 0: usługa wystartowała. Kod 1: inne konto niż fabryka albo usługa nie wystartowała.
