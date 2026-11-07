@@ -8,9 +8,11 @@ start-fabryki.sh jako konto fabryka:
     python3 skrzynka.py wykonaj <id polecenia>   praca polecenia; zawsze kończy się plikiem WYNIKI/<id>.json
 
 Polecenie to jeden plik JSON SKRZYNKA/<id>.json, który pisze tylko konto obserwator. Rodzaje: intencja,
-autopilot, odpowiedz, przyjecie, start. Pole zmiana wskazuje zmianę laboratorium; pole projekt wskazuje projekt
-aplikacji w folderze PROJEKTY: start go rozpoczyna, a autopilot, odpowiedz i przyjecie z polem projekt działają
-na przebiegu startu tego projektu. Treść polecenia przechodzi do wykonawcy laboratorium tylko jako dane:
+autopilot, odpowiedz, przyjecie, start, kawalek. Pole zmiana wskazuje zmianę laboratorium; pole projekt wskazuje
+projekt aplikacji w folderze PROJEKTY: start go rozpoczyna, a autopilot, odpowiedz i przyjecie z samym polem
+projekt działają na przebiegu startu tego projektu. Para projekt + zmiana wskazuje kawałek roadmapy w repo
+projektu: kawalek go zaczyna, a autopilot, odpowiedz i przyjecie z parą działają na jego przebiegu. Treść
+polecenia przechodzi do wykonawcy laboratorium tylko jako dane:
 kopia sprawdzonych bajtów w WYNIKI/<id>.polecenie.json i lista argumentów, bez powłoki.
 
 Foldery i konto są stałymi modułu; testy podmieniają je w procesie. Plik nie czyta zmiennych środowiska
@@ -37,7 +39,7 @@ PROJEKTY = DOM + "/projekty"
 WYKONAWCA = LAB + "/scripts/wykonaj_polecenie.py"
 OBSERWATOR = "obserwator"
 
-RODZAJE = ("intencja", "autopilot", "odpowiedz", "przyjecie", "start")
+RODZAJE = ("intencja", "autopilot", "odpowiedz", "przyjecie", "start", "kawalek")
 # Sześć rodzajów pytań z docs/zasady-budowy.md, punkt 6.
 RODZAJE_PYTAN = ("spór recenzenta z autorem", "eskalacja", "płatny przebieg", "zakres", "kryterium", "inne")
 ROZSTRZYGNAL = ("człowiek", "obserwator")
@@ -56,16 +58,20 @@ POLA = {
     "odpowiedz": ({"tresc", "rozstrzygnal", "pytania"}, set()),
     "przyjecie": ({"rozstrzygnal"}, {"tresc", "pytania"}),
     "start": ({"projekt", "tresc"}, set()),
+    "kawalek": ({"projekt", "zmiana"}, set()),
 }
-# rodzaj -> pola, z których polecenie ma dokładnie jedno: zmiana (laboratorium) albo projekt (przebieg startu
-# projektu). Para projekt + zmiana to zmiany w repo aplikacji, które przyjdą w kroku 2.
+# rodzaj -> pola celu, z których polecenie ma co najmniej jedno: zmiana (laboratorium) albo projekt (przebieg
+# startu projektu); oba naraz tylko w rodzajach z PARA.
 CEL = {
     "intencja": ("zmiana",),
     "autopilot": ("zmiana", "projekt"),
     "odpowiedz": ("zmiana", "projekt"),
     "przyjecie": ("zmiana", "projekt"),
     "start": (),
+    "kawalek": (),
 }
+# Rodzaje, w których para projekt + zmiana działa na przebiegu kawałka roadmapy w repo projektu.
+PARA = ("autopilot", "odpowiedz", "przyjecie")
 
 KOD_ODMOWA = 2
 KOD_ZAJETE = 3
@@ -125,8 +131,8 @@ def problemy(dane):
     obecne = [pole for pole in cele if pole in dane]
     if cele and not obecne:
         wynik.append(f"brak pola {cele[0]} dla rodzaju {rodzaj}")
-    elif len(obecne) > 1:
-        wynik.append(f"pola {' i '.join(obecne)} razem: zmiany w projekcie przyjdą w kroku 2")
+    elif len(obecne) > 1 and rodzaj not in PARA:
+        wynik.append(f"pola {' i '.join(obecne)} razem tylko w rodzajach {', '.join(PARA)}")
 
     for pole in ("zmiana", "projekt"):
         wartosc = dane.get(pole)
