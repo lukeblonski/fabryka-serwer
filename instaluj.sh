@@ -6,13 +6,13 @@ set -euo pipefail
 # Dziesięć kroków; każdy sprawdza stan przed działaniem, więc ponowne uruchomienie jest bezpieczne.
 #
 # Zasada bezpieczeństwa: root nie otwiera żadnej ścieżki pod /home/. Pliki kont czyta i zapisuje
-# konto właściciela (sudo -u <konto> tee, cmp -, cp, mkdir, git, jq), a treść przychodzi przez
+# konto właściciela (sudo -u <konto> tee, cmp -, cp, rm, mkdir, find, diff, git, jq), a treść przychodzi przez
 # standardowe wejście z folderu tymczasowego roota. Root zmienia tylko pliki systemu
 # (/etc, /usr/local/lib/fabryka-serwer, /var/lib/fabryka-serwer, /var/log) i tryby samych katalogów domowych.
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.4"
+WERSJA="v1.0.5"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -34,10 +34,9 @@ PLIKI=(
 )
 
 LIB=/usr/local/lib/fabryka-serwer
-# Foldery poleceń obserwatora: skrzynkę i zaufane pola pisze tylko obserwator, wyniki tylko fabryka.
+# Foldery wiadomości obserwatora: skrzynkę pisze tylko obserwator, wyniki tylko fabryka.
 SERWER=/var/lib/fabryka-serwer
 SKRZYNKA="$SERWER/skrzynka"
-ZAUFANE="$SERWER/zaufane"
 WYNIKI="$SERWER/wyniki"
 JEDNOSTKI=/etc/systemd/system
 SUDOERS_CEL=/etc/sudoers.d/fabryka-obserwator
@@ -54,6 +53,9 @@ OBS_SETTINGS="$OBS_HOME/.claude/settings.json"
 OBS_STAN="$OBS_HOME/.claude.json"
 OBS_CLAUDE="$OBS_HOME/.local/bin/claude"
 FAB_CLAUDE="$FAB_HOME/.local/bin/claude"
+FAB_SKILLE="$FAB_HOME/.claude/skills"
+FAB_SETTINGS="$FAB_HOME/.claude/settings.json"
+HAK_FABRYKI="python3 -I -B $LAB_DIR/scripts/hook_start_sesji.py"
 
 ZNACZNIK_PATH="# fabryka-serwer: ścieżka i umask konta (dopisane przez instalator)"
 ZNACZNIK_DOCKER="# fabryka-serwer: Docker bez roota (dopisane przez instalator)"
@@ -257,7 +259,7 @@ zakres_podrzedny /etc/subgid --add-subgids
 # umask 022 kont fabryka i obserwator w jednym miejscu: pam_umask czyta "umask=" z pola GECOS przed
 # ustawieniami z /etc/login.defs (USERGROUPS_ENAB daje 002), więc każda sesja PAM konta (sudo -u, menedżer
 # użytkownika, logowanie) tworzy pliki bez zapisu dla grupy. Fabryka nie daje zapisu grupie fabryka,
-# w której jest obserwator; obserwator nie daje grupie fabryka zapisu w skrzynce i folderze zaufanych pól.
+# w której jest obserwator; obserwator nie daje grupie fabryka zapisu w skrzynce.
 for konto in fabryka obserwator; do
   case "$(getent passwd "$konto" | cut -d: -f5)" in
     *umask=022*) ;;
@@ -286,13 +288,15 @@ folder_systemu() {
   chown "$2" "$1" || przerwij "Nie mogę ustawić właściciela $1."
   chmod "$3" "$1" || przerwij "Nie mogę ustawić trybu $1."
 }
-# Skrzynkę i zaufane pola pisze tylko obserwator, a fabryka czyta przez grupę (setgid: nowe pliki dostają
-# grupę fabryka). Wyniki pisze tylko fabryka, a obserwator czyta przez grupę fabryka.
+# Skrzynkę pisze tylko obserwator, a fabryka czyta przez grupę (setgid: nowe pliki dostają grupę fabryka).
+# Wyniki pisze tylko fabryka, a obserwator czyta przez grupę fabryka.
 folder_systemu "$SERWER" root:root 0755
 folder_systemu "$SKRZYNKA" obserwator:fabryka 2750
-folder_systemu "$ZAUFANE" obserwator:fabryka 2750
 folder_systemu "$WYNIKI" fabryka:fabryka 0750
-gotowe "foldery $SKRZYNKA, $ZAUFANE i $WYNIKI założone"
+gotowe "foldery $SKRZYNKA i $WYNIKI założone"
+# Folder z v1.0.4, którego od v1.0.5 nie ma: zgody zapisuje autopilot jak na Macu.
+rm -rf --one-file-system -- "$SERWER/zaufane" || przerwij "Nie mogę usunąć folderu $SERWER/zaufane z v1.0.4."
+gotowe "folderu $SERWER/zaufane nie ma"
 
 # --- 3. Claude Code --------------------------------------------------------------------------------------
 
@@ -426,19 +430,20 @@ else
   gotowe "umowa obserwatora zapisana"
 fi
 
-# Folder serwera do odczytu i zapis narzędziami plikowymi tylko w skrzynce i folderze zaufanych pól;
-# inne wpisy permissions zostają, nowe dochodzą bez duplikatów.
-ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$ZAUFANE")
+# Folder serwera do odczytu i zapis narzędziami plikowymi tylko w skrzynce; inne wpisy permissions zostają,
+# nowe dochodzą bez duplikatów, a każdy wpis z folderem $SERWER/zaufane z v1.0.4 znika.
+ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$SERWER/zaufane")
 WARUNEK_USTAWIEN='.cleanupPeriodDays == 365 and .autoMemoryDirectory == $notatki
   and .inputNeededNotifEnabled == true and .agentPushNotifEnabled == true and .remoteControlAtStartup == true
   and ([$serwer] - (.permissions.additionalDirectories // []) | length == 0)
-  and (["Edit(/\($skrzynka)/**)", "Edit(/\($zaufane)/**)"] - (.permissions.allow // []) | length == 0)'
+  and (["Edit(/\($skrzynka)/**)"] - (.permissions.allow // []) | length == 0)
+  and ([.permissions.allow[]? | select(contains($zaufane))] | length == 0)'
 FILTR_USTAWIEN='. + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
   inputNeededNotifEnabled: true, agentPushNotifEnabled: true, remoteControlAtStartup: true}
   | .permissions = (.permissions // {})
   | .permissions.additionalDirectories = ((.permissions.additionalDirectories // []) as $a | $a + ([$serwer] - $a))
-  | .permissions.allow = ((.permissions.allow // []) as $a
-      | $a + (["Edit(/\($skrzynka)/**)", "Edit(/\($zaufane)/**)"] - $a))'
+  | .permissions.allow = ((.permissions.allow // []) | map(select(contains($zaufane) | not)) as $a
+      | $a + (["Edit(/\($skrzynka)/**)"] - $a))'
 if ! sudo -u obserwator test -s "$OBS_SETTINGS"; then
   printf '{}\n' | sudo -u obserwator tee "$OBS_SETTINGS" > /dev/null
 fi
@@ -554,6 +559,53 @@ else
   gotowe "laboratorium sklonowane z $FABRYKA_REPO"
 fi
 
+# skille_laboratorium: nazwy folderów skilli klonu, po jednej w linii (czyta konto fabryka).
+skille_laboratorium() {
+  sudo -u fabryka -H find "$LAB_DIR/skills" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'
+}
+
+# skille_fabryki: folder każdego skilla laboratorium w ~/.claude/skills konta fabryka zastępuje kopia z klonu;
+# inne foldery zostają. Kopiuje i usuwa konto fabryka.
+skille_fabryki() {
+  local lista nazwa
+  lista=$(skille_laboratorium) || przerwij "Nie mogę odczytać skilli laboratorium w $LAB_DIR/skills."
+  [ -n "$lista" ] || przerwij "Laboratorium nie ma skilli w $LAB_DIR/skills."
+  sudo -u fabryka -H mkdir -p "$FAB_SKILLE"
+  while IFS= read -r nazwa; do
+    sudo -u fabryka -H rm -rf -- "$FAB_SKILLE/$nazwa"
+    sudo -u fabryka -H cp -R -- "$LAB_DIR/skills/$nazwa" "$FAB_SKILLE/$nazwa"
+  done <<< "$lista"
+  gotowe "skille laboratorium skopiowane do $FAB_SKILLE"
+}
+
+# Hak startu sesji konta fabryka w bloku jak w docs/start-projektu.md; inne klucze zostają, bez duplikatu.
+WARUNEK_HAKA='any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $polecenie)'
+FILTR_HAKA='.hooks = (.hooks // {})
+  | .hooks.SessionStart = ((.hooks.SessionStart // []) as $s
+      | if any($s[]?.hooks[]?; .type == "command" and .command == $polecenie) then $s
+        else $s + [{hooks: [{type: "command", command: $polecenie}]}] end)'
+
+# ustawienia_fabryki: hak startu sesji w ~/.claude/settings.json konta fabryka (pusty {}, gdy pliku nie ma);
+# niepoprawny JSON przerywa instalator.
+ustawienia_fabryki() {
+  sudo -u fabryka -H mkdir -p "$FAB_HOME/.claude"
+  if ! sudo -u fabryka -H test -s "$FAB_SETTINGS"; then
+    printf '{}\n' | sudo -u fabryka -H tee "$FAB_SETTINGS" > /dev/null
+  fi
+  if sudo -u fabryka -H jq -e --arg polecenie "$HAK_FABRYKI" "$WARUNEK_HAKA" "$FAB_SETTINGS" > /dev/null 2>&1; then
+    gotowe "hak startu sesji w ustawieniach Claude Code konta fabryka już jest"
+    return 0
+  fi
+  if ! sudo -u fabryka -H jq --arg polecenie "$HAK_FABRYKI" "$FILTR_HAKA" "$FAB_SETTINGS" > "$TMP/settings-fabryki.json"; then
+    przerwij "Ustawienia Claude Code konta fabryka (.claude/settings.json) nie są poprawnym JSON-em."
+  fi
+  sudo -u fabryka -H tee "$FAB_SETTINGS" < "$TMP/settings-fabryki.json" > /dev/null
+  gotowe "hak startu sesji dopisany do ustawień Claude Code konta fabryka (inne klucze bez zmian)"
+}
+
+skille_fabryki
+ustawienia_fabryki
+
 # --- 10. lista sprawdzeń -----------------------------------------------------------------------------------
 
 etap 10 "Lista sprawdzeń"
@@ -628,6 +680,26 @@ docker_bez_roota() {
 
 klon_laboratorium() {
   sudo -u fabryka git -C "$LAB_DIR" status --porcelain > /dev/null
+}
+
+# skille_fabryki_rowne_klonowi: dodatni sygnał; kod 0 tylko, gdy klon ma skille i folder każdego z nich
+# w ~/.claude/skills konta fabryka ma tę samą treść.
+skille_fabryki_rowne_klonowi() {
+  local lista nazwa
+  lista=$(skille_laboratorium) || return 1
+  [ -n "$lista" ] || return 1
+  while IFS= read -r nazwa; do
+    sudo -u fabryka -H diff -r -q -- "$LAB_DIR/skills/$nazwa" "$FAB_SKILLE/$nazwa" > /dev/null || return 1
+  done <<< "$lista"
+}
+
+hak_fabryki() {
+  sudo -u fabryka -H jq -e --arg polecenie "$HAK_FABRYKI" "$WARUNEK_HAKA" "$FAB_SETTINGS" > /dev/null
+}
+
+# bez_zaufanych: folderu $SERWER/zaufane z v1.0.4 nie ma (ani dowiązania o tej nazwie).
+bez_zaufanych() {
+  [ ! -e "$SERWER/zaufane" ] && [ ! -L "$SERWER/zaufane" ]
 }
 
 umowa_rowna_wzorowi() {
@@ -707,6 +779,9 @@ sprawdz "npm dla konta fabryka" "sudo -u fabryka npm --version i pakiet npm (apt
 sprawdz "gitleaks w wersji z szablonu CI ($GITLEAKS_WERSJA)" \
   "sudo -u fabryka gitleaks version i plik /usr/local/bin/gitleaks" gitleaks_w_wersji_szablonu
 sprawdz "laboratorium sklonowane" "folder $LAB_DIR" klon_laboratorium
+sprawdz "skille laboratorium w ~/.claude/skills konta fabryka równe klonowi" \
+  "foldery $LAB_DIR/skills i $FAB_SKILLE (uruchom instalator ponownie)" skille_fabryki_rowne_klonowi
+sprawdz "hak startu sesji w ustawieniach Claude Code konta fabryka" "plik $FAB_SETTINGS" hak_fabryki
 sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
 sprawdz "ustawienia Claude Code obserwatora" "pliki $OBS_SETTINGS i $OBS_STAN" ustawienia_obserwatora
 sprawdz "usługa obserwator.service działa" "systemctl status obserwator.service" \
@@ -714,12 +789,11 @@ sprawdz "usługa obserwator.service działa" "systemctl status obserwator.servic
 sprawdz "zadanie retencji archiwum włączone" "systemctl list-timers fabryka-retencja-obserwatora.timer" \
   systemctl is-active --quiet fabryka-retencja-obserwatora.timer
 sprawdz "proces remote-control obserwatora działa i nie czeka na pytanie (y/n)" \
-  "sudo -u obserwator tmux attach -t obserwator (odpowiedz y, wyjście: Ctrl-b, potem d)" remote_control_obserwatora
+  "sudo -u obserwator tmux attach -t obserwator (wpisz y, wyjście: Ctrl-b, potem d)" remote_control_obserwatora
 sprawdz "umask 022 kont fabryka i obserwator" "pole GECOS: getent passwd fabryka obserwator" umask_kont
 sprawdz "skrzynkę pisze i czyści tylko obserwator, fabryka nie zapisuje ani nie usuwa" \
   "właściciel obserwator:fabryka i tryb 2750 folderu $SKRZYNKA (ls -ld $SKRZYNKA)" tylko_obserwator_pisze "$SKRZYNKA"
-sprawdz "zaufane pola pisze i czyści tylko obserwator, fabryka nie zapisuje ani nie usuwa" \
-  "właściciel obserwator:fabryka i tryb 2750 folderu $ZAUFANE (ls -ld $ZAUFANE)" tylko_obserwator_pisze "$ZAUFANE"
+sprawdz "folderu $SERWER/zaufane z v1.0.4 nie ma" "ls -ld $SERWER/zaufane" bez_zaufanych
 sprawdz "obserwator uruchamia skrypt startowy fabryki" "plik $SUDOERS_CEL i $LIB/start-fabryki.sh" \
   sudo -u obserwator sudo -n -u fabryka "$LIB/start-fabryki.sh"
 

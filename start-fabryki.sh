@@ -7,11 +7,11 @@ set -euo pipefail
 # Bez argumentu: zakłada sesję tmux "fabryka" z powłoką w folderze laboratorium, gdy jej nie ma.
 # Kod 0: sesja "fabryka" istnieje po przebiegu. Kod 1: inne konto niż fabryka albo sesja nie powstała.
 #
-# Z jednym argumentem <id polecenia> (wzorzec RRRRMMDD-GGMMSS-xxxx): wykonuje polecenie obserwatora
-# z pliku /var/lib/fabryka-serwer/skrzynka/<id>.json. Rodzaje poleceń: intencja, autopilot, odpowiedz,
-# przyjecie, start. Sprawdzenie (rodzaj, format, właściciel i prawa pliku) robi skrzynka.py sprawdz, zanim
-# cokolwiek ruszy; pracę uruchamia skrzynka.py wykonaj w usłudze systemd-run --user konta fabryka i skrypt
-# wraca od razu. Koniec pracy to zawsze plik /var/lib/fabryka-serwer/wyniki/<id>.json.
+# Z jednym argumentem <id wiadomości> (wzorzec RRRRMMDD-GGMMSS-xxxx): przekazuje sesji głównej fabryki
+# wiadomość obserwatora z pliku /var/lib/fabryka-serwer/skrzynka/<id>.json (folder i zwykły tekst).
+# Sprawdzenie (pola, folder, właściciel i prawa pliku) robi skrzynka.py sprawdz, zanim cokolwiek ruszy;
+# turę claude -p w folderze wiadomości uruchamia skrzynka.py wykonaj w usłudze systemd-run --user konta
+# fabryka i skrypt wraca od razu. Koniec pracy to zawsze plik /var/lib/fabryka-serwer/wyniki/<id>.json.
 # Kod 0: usługa wystartowała. Kod 1: inne konto niż fabryka albo usługa nie wystartowała.
 # Kod 2: zły identyfikator, odmowa skrzynka.py sprawdz albo więcej niż jeden argument.
 
@@ -41,7 +41,8 @@ if [ "$#" -eq 1 ]; then
     echo "start-fabryki.sh: identyfikator polecenia nie pasuje do wzorca RRRRMMDD-GGMMSS-xxxx." >&2
     exit 2
   fi
-  # Odmowa przed uruchomieniem czegokolwiek: rodzaj spoza listy, zły format, zły właściciel albo prawa pliku.
+  # Odmowa przed uruchomieniem czegokolwiek: zły format, folder spoza listy, dowiązanie, pusty tekst, zły
+  # właściciel albo prawa pliku.
   if ! /usr/bin/python3 /usr/local/lib/fabryka-serwer/skrzynka.py sprawdz "$1"; then
     exit 2
   fi
