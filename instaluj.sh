@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.6"
+WERSJA="v1.0.7"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -37,6 +37,7 @@ PLIKI=(
   "fabryka-retencja-obserwatora.service"
   "fabryka-retencja-obserwatora.timer"
   "obserwator/CLAUDE.md"
+  "obserwator/narzedzia/wyslij.sh"
 )
 
 LIB=/usr/local/lib/fabryka-serwer
@@ -441,7 +442,7 @@ sudo -u fabryka gh auth setup-git
 # --- 6. folder obserwatora i ustawienia --------------------------------------------------------------------
 
 etap 6 "Folder obserwatora, umowa i ustawienia"
-sudo -u obserwator mkdir -p "$OBS_DIR" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude"
+sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude"
 
 if sudo -u obserwator test -f "$OBS_DIR/CLAUDE.md"; then
   if sudo -u obserwator cmp -s - "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md"; then
@@ -456,6 +457,23 @@ else
   sudo -u obserwator tee "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md" > /dev/null
   gotowe "umowa obserwatora zapisana"
 fi
+
+# Narzędzie wysyłania wiadomości do sesji głównej (umowa, „Rozmowa z sesją główną”): wzór zastępuje inną treść,
+# poprzednia wersja zostaje jako kopia zapasowa; bit wykonywania ustawia konto obserwator.
+if sudo -u obserwator test -f "$OBS_DIR/narzedzia/wyslij.sh"; then
+  if sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh"; then
+    gotowe "narzędzie wysyłania obserwatora równe wzorowi"
+  else
+    KOPIA="$OBS_DIR/narzedzia/wyslij.sh.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
+    sudo -u obserwator cp "$OBS_DIR/narzedzia/wyslij.sh" "$KOPIA"
+    sudo -u obserwator tee "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh" > /dev/null
+    gotowe "narzędzie wysyłania obserwatora zastąpione wzorem; poprzednia wersja w $KOPIA"
+  fi
+else
+  sudo -u obserwator tee "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh" > /dev/null
+  gotowe "narzędzie wysyłania obserwatora zapisane"
+fi
+sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/wyslij.sh"
 
 # Folder serwera do odczytu i zapis narzędziami plikowymi tylko w skrzynce; inne wpisy permissions zostają,
 # nowe dochodzą bez duplikatów, a każdy wpis z folderem $SERWER/zaufane z v1.0.4 znika.
@@ -733,6 +751,11 @@ umowa_rowna_wzorowi() {
   sudo -u obserwator cmp -s - "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md"
 }
 
+wyslij_rowny_wzorowi() {
+  sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh" \
+    && sudo -u obserwator test -x "$OBS_DIR/narzedzia/wyslij.sh"
+}
+
 ustawienia_obserwatora() {
   sudo -u obserwator jq -e "${ARGI_USTAWIEN[@]}" "$WARUNEK_USTAWIEN" "$OBS_SETTINGS" > /dev/null \
     && sudo -u obserwator jq -e --arg folder "$OBS_DIR" "$WARUNEK_STANU" "$OBS_STAN" > /dev/null
@@ -817,6 +840,8 @@ sprawdz "skille laboratorium w ~/.claude/skills konta fabryka równe klonowi" \
   "foldery $LAB_DIR/skills i $FAB_SKILLE (uruchom instalator ponownie)" skille_fabryki_rowne_klonowi
 sprawdz "hak startu sesji w ustawieniach Claude Code konta fabryka" "plik $FAB_SETTINGS" hak_fabryki
 sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
+sprawdz "narzędzie wysyłania obserwatora równe wzorowi i wykonywalne" "plik $OBS_DIR/narzedzia/wyslij.sh" \
+  wyslij_rowny_wzorowi
 sprawdz "ustawienia Claude Code obserwatora" "pliki $OBS_SETTINGS i $OBS_STAN" ustawienia_obserwatora
 sprawdz "usługa obserwator.service działa" "systemctl status obserwator.service" \
   systemctl is-active --quiet obserwator.service
