@@ -12,12 +12,18 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.5"
+WERSJA="v1.0.6"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
 GITLEAKS_WERSJA="8.30.1"
 GITLEAKS_SUMA="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+
+# mise, menedżer wersji języków projektów konta fabryka, w przypiętej wersji i suma SHA-256 binarki
+# mise-v2026.11.4-linux-x64 z pliku SHASUMS256.txt tego wydania (podpisanego GPG, zgodna z polem digest w API GitHuba).
+# Języki instaluje potem konto fabryka bez roota, tylko w folderze projektu (plik mise.toml).
+MISE_WERSJA="2026.11.4"
+MISE_SUMA="0296d9cba9324106d4e0962bb94a2072902f3658813aeb3b09504947bb8ddc2b"
 
 # Pliki pobierane z repozytorium instalatora w wersji WERSJA. Adres wskazuje tag pełną nazwą refs/tags/,
 # żeby gałąź o tej samej nazwie go nie przesłoniła; pliki tagu chroni niezmienne wydanie.
@@ -178,7 +184,7 @@ export DEBIAN_FRONTEND=noninteractive
 APT_CZEKAJ=(-o DPkg::Lock::Timeout=600)
 napisz "  Gdy system sam instaluje aktualizacje, apt czeka na nie do 10 minut."
 apt-get "${APT_CZEKAJ[@]}" update -q
-apt-get "${APT_CZEKAJ[@]}" install -y -q ca-certificates curl git jq tmux uidmap dbus-user-session nodejs npm
+apt-get "${APT_CZEKAJ[@]}" install -y -q ca-certificates curl git jq tmux uidmap dbus-user-session
 
 ARCH=$(dpkg --print-architecture)
 KOD_UBUNTU=$(. /etc/os-release && printf '%s' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
@@ -228,6 +234,27 @@ if [ "$ARCH" = "amd64" ]; then
   fi
 else
   napisz "  Uwaga: gitleaks $GITLEAKS_WERSJA instaluję tylko na amd64, a ten serwer to $ARCH. Pomijam gitleaks."
+fi
+
+# mise: binarka z wydania na GitHubie, suma SHA-256 sprawdzona przed instalacją; tylko amd64 (suma dotyczy linux-x64).
+# Instalator niczego nie odinstalowuje i nie wybiera żadnego języka: dane mise konto fabryka zakłada samo
+# przy pierwszym użyciu, a wersję języka zapisuje krok fabryki w folderze projektu.
+if [ "$ARCH" = "amd64" ]; then
+  if /usr/local/bin/mise --version 2> /dev/null | grep -qF "$MISE_WERSJA"; then
+    gotowe "mise $MISE_WERSJA już jest"
+  else
+    MISE_PLIK="$TMP/mise-v${MISE_WERSJA}-linux-x64"
+    curl -fsSL "https://github.com/jdx/mise/releases/download/v${MISE_WERSJA}/mise-v${MISE_WERSJA}-linux-x64" \
+      -o "$MISE_PLIK" || przerwij "Nie mogę pobrać mise $MISE_WERSJA; sprawdź sieć i uruchom ponownie."
+    if ! echo "$MISE_SUMA  $MISE_PLIK" | sha256sum -c - > /dev/null 2>&1; then
+      przerwij "Suma SHA-256 pobranego mise $MISE_WERSJA nie zgadza się z sumą w instalatorze. Niczego nie zainstalowano."
+    fi
+    install -m 0755 -o root -g root "$MISE_PLIK" /usr/local/bin/mise \
+      || przerwij "Nie mogę zapisać /usr/local/bin/mise."
+    gotowe "mise $MISE_WERSJA zainstalowany (suma SHA-256 zgodna)"
+  fi
+else
+  napisz "  Uwaga: mise $MISE_WERSJA instaluję tylko na amd64, a ten serwer to $ARCH. Pomijam mise."
 fi
 
 # --- 2. konta, grupy i reguła sudo -------------------------------------------------------------------------
@@ -747,6 +774,15 @@ gitleaks_w_wersji_szablonu() {
   return 1
 }
 
+mise_w_wersji_instalatora() {
+  local wynik
+  wynik=$(sudo -u fabryka mise --version 2>&1) || return 1
+  case "$wynik" in
+    *"$MISE_WERSJA"*) return 0 ;;
+  esac
+  return 1
+}
+
 umask_kont() {
   local konto
   for konto in fabryka obserwator; do
@@ -772,10 +808,8 @@ sprawdz "Claude fabryki zalogowany" "uruchom instalator ponownie i zaloguj konto
   sudo -u fabryka "$FAB_CLAUDE" auth status
 sprawdz "GitHub fabryki zalogowany" "sudo -u fabryka gh auth status" sudo -u fabryka gh auth status
 sprawdz "Docker bez roota na koncie fabryka" "systemctl --user status docker na koncie fabryka" docker_bez_roota
-sprawdz "node dla konta fabryka" "sudo -u fabryka node --version i pakiet nodejs (apt-get install nodejs)" \
-  sudo -u fabryka node --version
-sprawdz "npm dla konta fabryka" "sudo -u fabryka npm --version i pakiet npm (apt-get install npm)" \
-  sudo -u fabryka npm --version
+sprawdz "mise dla konta fabryka ($MISE_WERSJA)" \
+  "sudo -u fabryka mise --version i plik /usr/local/bin/mise" mise_w_wersji_instalatora
 sprawdz "gitleaks w wersji z szablonu CI ($GITLEAKS_WERSJA)" \
   "sudo -u fabryka gitleaks version i plik /usr/local/bin/gitleaks" gitleaks_w_wersji_szablonu
 sprawdz "laboratorium sklonowane" "folder $LAB_DIR" klon_laboratorium
