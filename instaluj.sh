@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.7"
+WERSJA="v1.0.8"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -38,6 +38,7 @@ PLIKI=(
   "fabryka-retencja-obserwatora.timer"
   "obserwator/CLAUDE.md"
   "obserwator/narzedzia/wyslij.sh"
+  "obserwator/skills/analiza-w-poprzek/SKILL.md"
 )
 
 LIB=/usr/local/lib/fabryka-serwer
@@ -57,6 +58,7 @@ LAB_DIR=/home/fabryka/fabryka
 NOTATKI="$OBS_DIR/notatki"
 ARCHIWUM="$OBS_DIR/archiwum"
 OBS_SETTINGS="$OBS_HOME/.claude/settings.json"
+OBS_SKILLE="$OBS_HOME/.claude/skills"
 OBS_STAN="$OBS_HOME/.claude.json"
 OBS_CLAUDE="$OBS_HOME/.local/bin/claude"
 FAB_CLAUDE="$FAB_HOME/.local/bin/claude"
@@ -442,7 +444,8 @@ sudo -u fabryka gh auth setup-git
 # --- 6. folder obserwatora i ustawienia --------------------------------------------------------------------
 
 etap 6 "Folder obserwatora, umowa i ustawienia"
-sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude"
+sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude" \
+  "$OBS_SKILLE/analiza-w-poprzek"
 
 if sudo -u obserwator test -f "$OBS_DIR/CLAUDE.md"; then
   if sudo -u obserwator cmp -s - "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md"; then
@@ -474,6 +477,29 @@ else
   gotowe "narzędzie wysyłania obserwatora zapisane"
 fi
 sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/wyslij.sh"
+
+# Skill analizy w poprzek obserwatora (osobisty skill Claude Code konta obserwator): wzór zastępuje inną treść,
+# poprzednia wersja zostaje jako kopia zapasowa. Nowy albo zmieniony skill restartuje sesję obserwatora w etapie 7,
+# bo działająca sesja Claude Code nie widzi folderu skilli, którego nie było przy jej starcie.
+ZMIANA_SKILLA=0
+if sudo -u obserwator test -f "$OBS_SKILLE/analiza-w-poprzek/SKILL.md"; then
+  if sudo -u obserwator cmp -s - "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
+    < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md"; then
+    gotowe "skill analizy w poprzek obserwatora równy wzorowi"
+  else
+    KOPIA="$OBS_SKILLE/analiza-w-poprzek/SKILL.md.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
+    sudo -u obserwator cp "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" "$KOPIA"
+    sudo -u obserwator tee "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
+      < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md" > /dev/null
+    ZMIANA_SKILLA=1
+    gotowe "skill analizy w poprzek obserwatora zastąpiony wzorem; poprzednia wersja w $KOPIA"
+  fi
+else
+  sudo -u obserwator tee "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
+    < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md" > /dev/null
+  ZMIANA_SKILLA=1
+  gotowe "skill analizy w poprzek obserwatora zapisany"
+fi
 
 # Folder serwera do odczytu i zapis narzędziami plikowymi tylko w skrzynce; inne wpisy permissions zostają,
 # nowe dochodzą bez duplikatów, a każdy wpis z folderem $SERWER/zaufane z v1.0.4 znika.
@@ -527,7 +553,7 @@ if zainstaluj_plik "$POBRANE/obserwator.service" "$JEDNOSTKI/obserwator.service"
   systemctl daemon-reload
 fi
 systemctl enable obserwator.service > /dev/null 2>&1 || przerwij "Nie mogę włączyć usługi obserwator.service."
-if [ "$ZMIANA_USLUGI" -eq 1 ] && systemctl is-active --quiet obserwator.service; then
+if { [ "$ZMIANA_USLUGI" -eq 1 ] || [ "$ZMIANA_SKILLA" -eq 1 ]; } && systemctl is-active --quiet obserwator.service; then
   systemctl restart obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
 else
   systemctl start obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
@@ -756,6 +782,11 @@ wyslij_rowny_wzorowi() {
     && sudo -u obserwator test -x "$OBS_DIR/narzedzia/wyslij.sh"
 }
 
+skill_obserwatora_rowny_wzorowi() {
+  sudo -u obserwator cmp -s - "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
+    < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md"
+}
+
 ustawienia_obserwatora() {
   sudo -u obserwator jq -e "${ARGI_USTAWIEN[@]}" "$WARUNEK_USTAWIEN" "$OBS_SETTINGS" > /dev/null \
     && sudo -u obserwator jq -e --arg folder "$OBS_DIR" "$WARUNEK_STANU" "$OBS_STAN" > /dev/null
@@ -842,6 +873,8 @@ sprawdz "hak startu sesji w ustawieniach Claude Code konta fabryka" "plik $FAB_S
 sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
 sprawdz "narzędzie wysyłania obserwatora równe wzorowi i wykonywalne" "plik $OBS_DIR/narzedzia/wyslij.sh" \
   wyslij_rowny_wzorowi
+sprawdz "skill analizy w poprzek obserwatora równy wzorowi" "plik $OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
+  skill_obserwatora_rowny_wzorowi
 sprawdz "ustawienia Claude Code obserwatora" "pliki $OBS_SETTINGS i $OBS_STAN" ustawienia_obserwatora
 sprawdz "usługa obserwator.service działa" "systemctl status obserwator.service" \
   systemctl is-active --quiet obserwator.service

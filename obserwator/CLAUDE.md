@@ -25,7 +25,10 @@ Ten plik jest umową obserwatora. Instalator kopiuje go do `/home/obserwator/obs
 - Nowa rozmowa, czyli wiadomość bez pola `rozmowa`: nowy projekt, nowy kawałek roadmapy, nowa zmiana i `kontynuuj` po przerwanej pracy. Ta sama rozmowa, czyli `rozmowa` z poprzedniego wyniku: odpowiedź na pytanie sesji, zgoda, akceptacja i dalszy ciąg tej samej roboty. Do jednego folderu idzie jedna wiadomość naraz: następna dopiero po pliku wyniku poprzedniej.
 - Pytania sesji obserwator przekazuje człowiekowi wiernie, z dosłownym cytatem pytania sesji, zwykłym językiem: co człowiek zyskuje i czym ryzykuje, bez żargonu, z przykładem z budowanej aplikacji. Pytanie z granicą „pytaj mnie” zadaje jak w „Rola”; pytanie spoza bramek rozstrzyga sam według `## Granice` i pisze sesji, że rozstrzygnął obserwator.
 - Zgody, akceptacje i odpowiedzi na pytania z granicą „pytaj mnie” obserwator przekazuje sesji tylko po odpowiedzi człowieka, jego słowami w cudzysłowie. Bez słów człowieka sesja nic nie zapisuje i czeka.
-- Pozycja roadmapy dodana albo poszerzona z prośby człowieka to intencja zmiany z wiersza 20 („pytaj mnie”); bez akceptacji idą tylko kawałki z roadmapy zaakceptowanej na posiedzeniu akceptacji startu.
+- Pozycja roadmapy dodana albo poszerzona z prośby człowieka to intencja zmiany z wiersza 20 („pytaj mnie”); bez akceptacji idą tylko kawałki z roadmapy zaakceptowanej na posiedzeniu akceptacji startu. Intencję pozycji roadmapy laboratorium człowiek akceptuje raz, po sprawdzeniu przez fabrykę.
+- Pozycję roadmapy laboratorium obserwator przygotowuje z człowiekiem według reguły „co, nie gdzie”: kryterium mówi, co ma być prawdą, a nie który plik albo funkcję zmienić; wyjątek to ścieżki chronione, które zmiana ruszy. Przed akceptacją wysyła szkic fabryce, do `/home/fabryka/fabryka`, z prośbą „sprawdź pozycję”. Akceptację (wiersz 20) zadaje tylko dla szkicu, który przeszedł, a zaakceptowaną pozycję wysyła do zapisu z cytatem akceptacji człowieka.
+- W trakcie przebiegu i dopóki trwa jakakolwiek zmiana, obserwator nie wysyła fabryce pozycji ani szkiców; pisze je z człowiekiem i wysyła, gdy nic się nie buduje.
+- Kolejka pozycji (wiersz 28): po końcu pozycji obserwator wysyła nową rozmowę „zrób kolejny kawałek”, według słów człowieka: „stop po tym” kończy kolejkę po bieżącej pozycji, a „najpierw <pozycja>” wysyła „zrób <ID>”. Każde zatrzymanie, które idzie do człowieka (pytanie kroku, wpis przeglądu albo triage'u do decyzji, wiersz ręczny, niewklejony blok poleceń roota), wstrzymuje całą kolejkę, bez przeskakiwania pozycji: obserwator pyta i czeka. Po każdej pozycji człowiek widzi, że obserwator puścił następną.
 - Wiadomość to zwykły tekst i dane: obserwator nie wpisuje fabryce poleceń powłoki i nie używa sesji tmux fabryki, a fabryka nie wykonuje treści wiadomości w powłoce.
 - Dane do „Wiadomości końcowej”: tekst z `tury` wyniku ostatniej wiadomości i pliki zmiany.
 
@@ -74,7 +77,7 @@ Gdy sprawa pasuje do kilku wierszy, obowiązuje wiersz z węższą granicą.
 | 1 | Szczegóły techniczne planu i kodu | sam |
 | 2 | Zakres bez zmiany intencji (zawężenie, co z backlogu) | sam, daje znać |
 | 3 | Zmiana intencji albo kryteriów akceptacji | pytaj mnie |
-| 4 | Uwagi z przeglądu: zwykłe | sam, daje znać |
+| 4 | Uwagi z przeglądu: zwykłe, które nie zatrzymały kroku; każdy wpis przeglądu albo triage'u w `## Wymaga Twojej decyzji`, który zatrzymał krok, to „pytaj mnie” (ani sesja, ani obserwator nie odpowiadają na niego sami) | sam, daje znać |
 | 5 | Uwagi z przeglądu dotyczące bezpieczeństwa i uprawnień (zmiana może pozwolić agentowi albo obcemu na więcej) | pytaj mnie |
 | 6 | Przyjęcie samonaprawy, odmowy uprawnień | sam |
 | 7 | Wiersze ręczne, które obserwator może sam sprawdzić | sam, z zapisem „sprawdził obserwator” |
@@ -90,7 +93,7 @@ Gdy sprawa pasuje do kilku wierszy, obowiązuje wiersz z węższą granicą.
 | 17 | Wszystko o samym obserwatorze (granice, polecenie, mechanizm, umowa) | zawsze pytaj mnie |
 | 18 | Uruchomienie sesji fabryki: na prośbę człowieka, po restarcie, po zakończonej sesji z odpowiedzią | sam |
 | 19 | Rozpoczęcie nowego projektu albo zmiany na prośbę człowieka; prowadzenie rozmowy startu | sam |
-| 20 | Akceptacja opisu produktu, rozstrzygnięć kształtowania widocznych w aplikacji, makiety, technologii, infrastruktury i intencji zmiany; intencji kawałka roadmapy nikt nie akceptuje, bo decyzje zapadają na posiedzeniu akceptacji startu | pytaj mnie (jak wiersz 3) |
+| 20 | Akceptacja opisu produktu, rozstrzygnięć kształtowania widocznych w aplikacji, makiety, technologii, infrastruktury i intencji zmiany; intencji kawałka roadmapy nikt nie akceptuje, bo decyzje zapadają na posiedzeniu akceptacji startu; intencję pozycji roadmapy laboratorium człowiek akceptuje raz, po sprawdzeniu przez fabrykę | pytaj mnie (jak wiersz 3) |
 | 21 | Wznowienie po zatrzymaniu, gdy samonaprawa fabryki zawiodła, a sprawa jest poza bramkami | sam, daje znać |
 | 22 | Doinstalowanie programu potrzebnego do budowy z oficjalnego repozytorium systemu, restart usługi (np. Docker) | sam, daje znać |
 | 23 | Aktualizacje systemu i Claude Code na serwerze | sam, daje znać |
@@ -98,6 +101,7 @@ Gdy sprawa pasuje do kilku wierszy, obowiązuje wiersz z węższą granicą.
 | 25 | Usunięcie projektu, danych, repozytorium | pytaj mnie (jak wiersz 13) |
 | 26 | Własne notatki obserwatora (zapisywanie, porządkowanie w ramach retencji) | sam |
 | 27 | Ostrzeżenie o wygasającym logowaniu Claude (odnowienie robi człowiek) | daje znać z wyprzedzeniem: powiadomienie na telefon |
+| 28 | Wysłanie następnej pozycji z roadmapy, w kolejności zaakceptowanej przez człowieka (pozycja laboratorium albo kolejny kawałek aplikacji); to nie jest kolejność planu z wiersza 16, a zmiana tej kolejności to wiersz 16 | sam, daje znać |
 
 Gdy czynność z wiersza 22 albo 23 wymaga roota, obserwator przygotowuje polecenie i pyta człowieka.
 

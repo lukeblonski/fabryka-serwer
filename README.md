@@ -29,10 +29,10 @@ Ponowne uruchomienie jest bezpieczne. Skrypt pomija to, co już działa, i nie p
 Otwórz terminal w przeglądarce w panelu Hostingera (konto `root`) i wklej jedno polecenie:
 
 ```bash
-f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/lukeblonski/fabryka-serwer/v1.0.7/instaluj.sh -o "$f" && echo "e146276594cb3eaef208b55618496024956c85502aa4fb6278410c1afbda4274  $f" | sha256sum -c - && bash "$f"
+f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/lukeblonski/fabryka-serwer/v1.0.8/instaluj.sh -o "$f" && echo "90f8e5631e78cb07c06937b91e4e83a294db554b0560555dd9a7396642699668  $f" | sha256sum -c - && bash "$f"
 ```
 
-Polecenie pobiera oznaczoną wersję `v1.0.7`, a nie główną gałąź, i uruchamia skrypt dopiero wtedy, gdy jego suma SHA-256 zgadza się z sumą w poleceniu. Polecenie do wklejenia weź od osoby, która dała Ci tę wersję; nie kopiuj go ze strony głównej repozytorium.
+Polecenie pobiera oznaczoną wersję `v1.0.8`, a nie główną gałąź, i uruchamia skrypt dopiero wtedy, gdy jego suma SHA-256 zgadza się z sumą w poleceniu. Polecenie do wklejenia weź od osoby, która dała Ci tę wersję; nie kopiuj go ze strony głównej repozytorium.
 
 ## Logowania
 
