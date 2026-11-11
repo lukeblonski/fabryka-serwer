@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.8"
+WERSJA="v1.0.10"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -24,6 +24,13 @@ GITLEAKS_SUMA="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 # Języki instaluje potem konto fabryka bez roota, tylko w folderze projektu (plik mise.toml).
 MISE_WERSJA="2026.11.4"
 MISE_SUMA="0296d9cba9324106d4e0962bb94a2072902f3658813aeb3b09504947bb8ddc2b"
+
+# Obraz przeglądarki do makiet i testów aplikacji, przypięty tagiem i skrótem: ten sam co IMAGE w scripts/makieta.py
+# laboratorium. PRZEGLADARKA to ścieżka przeglądarki w obrazie (BROWSER w makieta.py), zależna od wersji obrazu.
+# PROBA_PRZEGLADARKI to próbny plik kontroli: wypisuje w treści strony parametr state z adresu.
+OBRAZ_PRZEGLADARKI="mcr.microsoft.com/playwright:v1.65.0-noble@sha256:6e3fb709361521eb27161606e6da6d2674e5e89fa16516cb37d6fdd91372273d"
+PRZEGLADARKA="/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
+PROBA_PRZEGLADARKI='<!doctype html><body><script>document.body.textContent=new URLSearchParams(location.search).get("state")</script>'
 
 # Pliki pobierane z repozytorium instalatora w wersji WERSJA. Adres wskazuje tag pełną nazwą refs/tags/,
 # żeby gałąź o tej samej nazwie go nie przesłoniła; pliki tagu chroni niezmienne wydanie.
@@ -39,6 +46,7 @@ PLIKI=(
   "obserwator/CLAUDE.md"
   "obserwator/narzedzia/wyslij.sh"
   "obserwator/skills/analiza-w-poprzek/SKILL.md"
+  "obserwator/skills/przeglad-po-projekcie/SKILL.md"
 )
 
 LIB=/usr/local/lib/fabryka-serwer
@@ -59,6 +67,8 @@ NOTATKI="$OBS_DIR/notatki"
 ARCHIWUM="$OBS_DIR/archiwum"
 OBS_SETTINGS="$OBS_HOME/.claude/settings.json"
 OBS_SKILLE="$OBS_HOME/.claude/skills"
+# Osobiste skille Claude Code konta obserwator: wzór każdego to obserwator/skills/<nazwa>/SKILL.md z PLIKI.
+SKILLE_OBSERWATORA=(analiza-w-poprzek przeglad-po-projekcie)
 OBS_STAN="$OBS_HOME/.claude.json"
 OBS_CLAUDE="$OBS_HOME/.local/bin/claude"
 FAB_CLAUDE="$FAB_HOME/.local/bin/claude"
@@ -360,6 +370,11 @@ jako_fabryka_z_sesja() {
   sudo -u fabryka env "XDG_RUNTIME_DIR=$FAB_RUN" "DBUS_SESSION_BUS_ADDRESS=unix:path=$FAB_RUN/bus" "$@"
 }
 
+# Polecenie docker konta fabryka (Docker bez roota) z jej sesją.
+docker_fabryki() {
+  jako_fabryka_z_sesja env "DOCKER_HOST=unix://$FAB_RUN/docker.sock" docker "$@"
+}
+
 # Ubuntu 24.04+ ogranicza przestrzenie nazw bez profilu AppArmor; profil tylko dla rootlesskit,
 # bez wyłączania ograniczenia w całym systemie.
 if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2> /dev/null || echo 0)" = "1" ]; then
@@ -406,6 +421,16 @@ for plik in .profile .bashrc; do
   dopisz_blok fabryka "$FAB_HOME/$plik" "$ZNACZNIK_DOCKER" "$BLOK_DOCKERA"
 done
 
+# Jedna przeglądarka dla makiet i testów aplikacji: obraz pobiera konto fabryka raz; kolejne uruchomienie go nie pobiera.
+if docker_fabryki image inspect "$OBRAZ_PRZEGLADARKI" > /dev/null 2>&1; then
+  gotowe "obraz przeglądarki do makiet i testów już jest"
+else
+  napisz "  Pobieram obraz przeglądarki do makiet i testów: ok. 1 GB pobierania, 3,6 GB na dysku."
+  docker_fabryki pull "$OBRAZ_PRZEGLADARKI" \
+    || przerwij "Nie mogę pobrać obrazu przeglądarki $OBRAZ_PRZEGLADARKI. Sprawdź sieć i wolne miejsce na dysku (df -h), potem uruchom instalator ponownie."
+  gotowe "obraz przeglądarki do makiet i testów pobrany"
+fi
+
 # --- 5. logowania ------------------------------------------------------------------------------------------
 
 etap 5 "Logowania"
@@ -444,8 +469,10 @@ sudo -u fabryka gh auth setup-git
 # --- 6. folder obserwatora i ustawienia --------------------------------------------------------------------
 
 etap 6 "Folder obserwatora, umowa i ustawienia"
-sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude" \
-  "$OBS_SKILLE/analiza-w-poprzek"
+sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude"
+for skill in "${SKILLE_OBSERWATORA[@]}"; do
+  sudo -u obserwator mkdir -p "$OBS_SKILLE/$skill"
+done
 
 if sudo -u obserwator test -f "$OBS_DIR/CLAUDE.md"; then
   if sudo -u obserwator cmp -s - "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md"; then
@@ -478,43 +505,54 @@ else
 fi
 sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/wyslij.sh"
 
-# Skill analizy w poprzek obserwatora (osobisty skill Claude Code konta obserwator): wzór zastępuje inną treść,
+# Skille obserwatora (osobiste skille Claude Code konta obserwator, SKILLE_OBSERWATORA): wzór zastępuje inną treść,
 # poprzednia wersja zostaje jako kopia zapasowa. Nowy albo zmieniony skill restartuje sesję obserwatora w etapie 7,
 # bo działająca sesja Claude Code nie widzi folderu skilli, którego nie było przy jej starcie.
 ZMIANA_SKILLA=0
-if sudo -u obserwator test -f "$OBS_SKILLE/analiza-w-poprzek/SKILL.md"; then
-  if sudo -u obserwator cmp -s - "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
-    < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md"; then
-    gotowe "skill analizy w poprzek obserwatora równy wzorowi"
+for skill in "${SKILLE_OBSERWATORA[@]}"; do
+  if sudo -u obserwator test -f "$OBS_SKILLE/$skill/SKILL.md"; then
+    if sudo -u obserwator cmp -s - "$OBS_SKILLE/$skill/SKILL.md" \
+      < "$POBRANE/obserwator/skills/$skill/SKILL.md"; then
+      gotowe "skill obserwatora $skill równy wzorowi"
+    else
+      KOPIA="$OBS_SKILLE/$skill/SKILL.md.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
+      sudo -u obserwator cp "$OBS_SKILLE/$skill/SKILL.md" "$KOPIA"
+      sudo -u obserwator tee "$OBS_SKILLE/$skill/SKILL.md" \
+        < "$POBRANE/obserwator/skills/$skill/SKILL.md" > /dev/null
+      ZMIANA_SKILLA=1
+      gotowe "skill obserwatora $skill zastąpiony wzorem; poprzednia wersja w $KOPIA"
+    fi
   else
-    KOPIA="$OBS_SKILLE/analiza-w-poprzek/SKILL.md.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
-    sudo -u obserwator cp "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" "$KOPIA"
-    sudo -u obserwator tee "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
-      < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md" > /dev/null
+    sudo -u obserwator tee "$OBS_SKILLE/$skill/SKILL.md" \
+      < "$POBRANE/obserwator/skills/$skill/SKILL.md" > /dev/null
     ZMIANA_SKILLA=1
-    gotowe "skill analizy w poprzek obserwatora zastąpiony wzorem; poprzednia wersja w $KOPIA"
+    gotowe "skill obserwatora $skill zapisany"
   fi
-else
-  sudo -u obserwator tee "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
-    < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md" > /dev/null
-  ZMIANA_SKILLA=1
-  gotowe "skill analizy w poprzek obserwatora zapisany"
-fi
+done
 
-# Folder serwera do odczytu i zapis narzędziami plikowymi tylko w skrzynce; inne wpisy permissions zostają,
-# nowe dochodzą bez duplikatów, a każdy wpis z folderem $SERWER/zaufane z v1.0.4 znika.
-ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$SERWER/zaufane")
+# Folder serwera, laboratorium i projektów do odczytu, zapis narzędziami plikowymi tylko w skrzynce, a w laboratorium
+# i projektach reguła deny dla Edit; inne wpisy permissions zostają, nowe dochodzą bez duplikatów, a znika każdy wpis
+# z folderem $SERWER/zaufane z v1.0.4, każdy inny folder konta fabryka w additionalDirectories i każda reguła allow
+# z folderem konta fabryka.
+ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$SERWER/zaufane"
+  --arg lab "$LAB_DIR" --arg projekty "$FAB_HOME/projekty" --arg dom "$FAB_HOME")
 WARUNEK_USTAWIEN='.cleanupPeriodDays == 365 and .autoMemoryDirectory == $notatki
   and .inputNeededNotifEnabled == true and .agentPushNotifEnabled == true and .remoteControlAtStartup == true
-  and ([$serwer] - (.permissions.additionalDirectories // []) | length == 0)
+  and ([$serwer, $lab, $projekty] - (.permissions.additionalDirectories // []) | length == 0)
+  and ([.permissions.additionalDirectories[]? | select(type == "string" and (. == $dom or startswith($dom + "/"))
+      and . != $lab and . != $projekty)] | length == 0)
   and (["Edit(/\($skrzynka)/**)"] - (.permissions.allow // []) | length == 0)
-  and ([.permissions.allow[]? | select(contains($zaufane))] | length == 0)'
+  and ([.permissions.allow[]? | select(contains($zaufane) or contains($dom))] | length == 0)
+  and (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - (.permissions.deny // []) | length == 0)'
 FILTR_USTAWIEN='. + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
   inputNeededNotifEnabled: true, agentPushNotifEnabled: true, remoteControlAtStartup: true}
   | .permissions = (.permissions // {})
-  | .permissions.additionalDirectories = ((.permissions.additionalDirectories // []) as $a | $a + ([$serwer] - $a))
-  | .permissions.allow = ((.permissions.allow // []) | map(select(contains($zaufane) | not)) as $a
-      | $a + (["Edit(/\($skrzynka)/**)"] - $a))'
+  | .permissions.additionalDirectories = ((.permissions.additionalDirectories // [])
+      | map(select((type == "string" and (. == $dom or startswith($dom + "/")) and . != $lab and . != $projekty) | not))
+        as $a | $a + ([$serwer, $lab, $projekty] - $a))
+  | .permissions.allow = ((.permissions.allow // []) | map(select((contains($zaufane) or contains($dom)) | not)) as $a
+      | $a + (["Edit(/\($skrzynka)/**)"] - $a))
+  | .permissions.deny = ((.permissions.deny // []) as $a | $a + (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - $a))'
 if ! sudo -u obserwator test -s "$OBS_SETTINGS"; then
   printf '{}\n' | sudo -u obserwator tee "$OBS_SETTINGS" > /dev/null
 fi
@@ -677,6 +715,10 @@ ustawienia_fabryki() {
 skille_fabryki
 ustawienia_fabryki
 
+# Folder projektów aplikacji konta fabryka (obserwator czyta go przez grupę fabryka); zakłada go konto fabryka.
+sudo -u fabryka mkdir -p "$FAB_HOME/projekty"
+gotowe "folder $FAB_HOME/projekty jest"
+
 # --- 10. lista sprawdzeń -----------------------------------------------------------------------------------
 
 etap 10 "Lista sprawdzeń"
@@ -701,7 +743,7 @@ fabryka_nie_widzi_obserwatora() {
 }
 
 obserwator_czyta_laboratorium() {
-  sudo -u obserwator cat "$LAB_DIR/CLAUDE.md" > /dev/null
+  sudo -u obserwator cat "$LAB_DIR/CLAUDE.md" > /dev/null && sudo -u obserwator ls "$FAB_HOME/projekty" > /dev/null
 }
 
 regula_sudo_obserwatora() {
@@ -749,6 +791,26 @@ docker_bez_roota() {
   return 1
 }
 
+# przegladarka_makiet: dodatni sygnał; konto fabryka zapisuje próbny plik w swoim folderze tymczasowym w /tmp,
+# a kontener obrazu przeglądarki bez sieci otwiera go z dysku z parametrem w adresie: --dump-dom ma tekst parametru,
+# a --screenshot daje plik PNG. Folder sprząta konto fabryka; root nie otwiera ścieżek pod /home.
+przegladarka_makiet() {
+  local folder dom naglowek wynik=1
+  folder=$(sudo -u fabryka mktemp -d /tmp/fabryka-przegladarka.XXXXXX) || return 1
+  if printf '%s' "$PROBA_PRZEGLADARKI" | sudo -u fabryka tee "$folder/proba.html" > /dev/null \
+    && dom=$(docker_fabryki run --rm --network none -v "$folder:/m:ro" "$OBRAZ_PRZEGLADARKI" "$PRZEGLADARKA" \
+      --no-sandbox --dump-dom 'file:///m/proba.html?state=proba') \
+    && docker_fabryki run --rm --network none -v "$folder:/m" "$OBRAZ_PRZEGLADARKI" "$PRZEGLADARKA" \
+      --no-sandbox --hide-scrollbars --window-size=1280,800 --screenshot=/m/proba.png 'file:///m/proba.html?state=proba' \
+    && naglowek=$(sudo -u fabryka head -c 8 "$folder/proba.png" | od -An -tx1 | tr -d ' \n'); then
+    case "$dom" in
+      *"<body>proba</body>"*) [ "$naglowek" = "89504e470d0a1a0a" ] && wynik=0 ;;
+    esac
+  fi
+  sudo -u fabryka rm -rf -- "$folder"
+  return "$wynik"
+}
+
 klon_laboratorium() {
   sudo -u fabryka git -C "$LAB_DIR" status --porcelain > /dev/null
 }
@@ -782,9 +844,10 @@ wyslij_rowny_wzorowi() {
     && sudo -u obserwator test -x "$OBS_DIR/narzedzia/wyslij.sh"
 }
 
+# skill_obserwatora_rowny_wzorowi <nazwa>: skill obserwatora z SKILLE_OBSERWATORA ma treść pobranego wzoru.
 skill_obserwatora_rowny_wzorowi() {
-  sudo -u obserwator cmp -s - "$OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
-    < "$POBRANE/obserwator/skills/analiza-w-poprzek/SKILL.md"
+  sudo -u obserwator cmp -s - "$OBS_SKILLE/$1/SKILL.md" \
+    < "$POBRANE/obserwator/skills/$1/SKILL.md"
 }
 
 ustawienia_obserwatora() {
@@ -849,8 +912,9 @@ umask_kont() {
 
 sprawdz "konto fabryka nie czyta i nie zmienia katalogu obserwatora" \
   "tryb 0700 katalogu $OBS_HOME (ls -ld $OBS_HOME)" fabryka_nie_widzi_obserwatora
-sprawdz "obserwator czyta pliki laboratorium" \
-  "tryb 0750 katalogu $FAB_HOME i grupę fabryka obserwatora (id obserwator)" obserwator_czyta_laboratorium
+sprawdz "obserwator czyta pliki laboratorium i projektów" \
+  "tryb 0750 katalogu $FAB_HOME, grupę fabryka obserwatora (id obserwator) i folder $FAB_HOME/projekty" \
+  obserwator_czyta_laboratorium
 sprawdz "jedyna reguła sudo obserwatora to skrypt startowy fabryki" \
   "sudo -l -U obserwator i plik $SUDOERS_CEL" regula_sudo_obserwatora
 sprawdz "obserwator nie ma pełnego sudo" "sudo -l -U obserwator" obserwator_bez_pelnego_sudo
@@ -862,6 +926,9 @@ sprawdz "Claude fabryki zalogowany" "uruchom instalator ponownie i zaloguj konto
   sudo -u fabryka "$FAB_CLAUDE" auth status
 sprawdz "GitHub fabryki zalogowany" "sudo -u fabryka gh auth status" sudo -u fabryka gh auth status
 sprawdz "Docker bez roota na koncie fabryka" "systemctl --user status docker na koncie fabryka" docker_bez_roota
+sprawdz "przeglądarka do makiet i testów otwiera bez sieci próbny plik z parametrem w adresie i robi jego zrzut" \
+  "obraz przeglądarki na koncie fabryka (docker image inspect $OBRAZ_PRZEGLADARKI); uruchom instalator ponownie" \
+  przegladarka_makiet
 sprawdz "mise dla konta fabryka ($MISE_WERSJA)" \
   "sudo -u fabryka mise --version i plik /usr/local/bin/mise" mise_w_wersji_instalatora
 sprawdz "gitleaks w wersji z szablonu CI ($GITLEAKS_WERSJA)" \
@@ -873,8 +940,10 @@ sprawdz "hak startu sesji w ustawieniach Claude Code konta fabryka" "plik $FAB_S
 sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
 sprawdz "narzędzie wysyłania obserwatora równe wzorowi i wykonywalne" "plik $OBS_DIR/narzedzia/wyslij.sh" \
   wyslij_rowny_wzorowi
-sprawdz "skill analizy w poprzek obserwatora równy wzorowi" "plik $OBS_SKILLE/analiza-w-poprzek/SKILL.md" \
-  skill_obserwatora_rowny_wzorowi
+for skill in "${SKILLE_OBSERWATORA[@]}"; do
+  sprawdz "skill obserwatora $skill równy wzorowi" "plik $OBS_SKILLE/$skill/SKILL.md" \
+    skill_obserwatora_rowny_wzorowi "$skill"
+done
 sprawdz "ustawienia Claude Code obserwatora" "pliki $OBS_SETTINGS i $OBS_STAN" ustawienia_obserwatora
 sprawdz "usługa obserwator.service działa" "systemctl status obserwator.service" \
   systemctl is-active --quiet obserwator.service

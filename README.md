@@ -7,7 +7,7 @@ Jeden skrypt stawia na czystym serwerze Ubuntu wszystko, czego potrzebują fabry
 1. Instaluje pakiety systemu, GitHub CLI i Dockera.
 2. Zakłada dwa konta: `obserwator` i `fabryka`. Fabryka nie widzi plików obserwatora. Obserwator czyta pliki fabryki i ma jedną regułę sudo: uruchomienie skryptu startowego fabryki jako `fabryka`.
 3. Instaluje Claude Code na obu kontach i dopisuje jego folder do ścieżki.
-4. Uruchamia Dockera bez roota na koncie `fabryka`.
+4. Uruchamia Dockera bez roota na koncie `fabryka` i pobiera raz obraz przeglądarki do makiet i testów aplikacji (ok. 1 GB pobierania, 3,6 GB na dysku).
 5. Prowadzi logowania: Claude obserwatora, Claude fabryki, GitHub fabryki.
 6. Zakłada folder obserwatora z umową i granicami, notatkami i archiwum oraz ustawia Claude Code obserwatora (365 dni historii, pamięć w folderze obserwatora, powiadomienia na telefon, Remote Control).
 7. Włącza usługę systemu, która uruchamia sesję obserwatora przy starcie serwera i po każdym jej zakończeniu.
@@ -29,10 +29,10 @@ Ponowne uruchomienie jest bezpieczne. Skrypt pomija to, co już działa, i nie p
 Otwórz terminal w przeglądarce w panelu Hostingera (konto `root`) i wklej jedno polecenie:
 
 ```bash
-f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/lukeblonski/fabryka-serwer/v1.0.8/instaluj.sh -o "$f" && echo "90f8e5631e78cb07c06937b91e4e83a294db554b0560555dd9a7396642699668  $f" | sha256sum -c - && bash "$f"
+f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/lukeblonski/fabryka-serwer/v1.0.10/instaluj.sh -o "$f" && echo "2fc4ccdc9f9ef5dbd5d790fa9405be6f91bf7bea4404526482264213270cee56  $f" | sha256sum -c - && bash "$f"
 ```
 
-Polecenie pobiera oznaczoną wersję `v1.0.8`, a nie główną gałąź, i uruchamia skrypt dopiero wtedy, gdy jego suma SHA-256 zgadza się z sumą w poleceniu. Polecenie do wklejenia weź od osoby, która dała Ci tę wersję; nie kopiuj go ze strony głównej repozytorium.
+Polecenie pobiera oznaczoną wersję `v1.0.10`, a nie główną gałąź, i uruchamia skrypt dopiero wtedy, gdy jego suma SHA-256 zgadza się z sumą w poleceniu. Polecenie do wklejenia weź od osoby, która dała Ci tę wersję; nie kopiuj go ze strony głównej repozytorium.
 
 ## Logowania
 

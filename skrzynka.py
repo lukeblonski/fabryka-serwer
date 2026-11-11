@@ -12,8 +12,8 @@ PROJEKTY/<projekt> z nazwą według wzorca ZMIANA), tekst (zwykły tekst do sesj
 rozmowy do wznowienia). Wykonawca bierze blokadę folderu i uruchamia w nim jedną turę claude -p: tekst idzie na
 wejście standardowe, nigdy przez powłokę ani argument. Wiadomość bez pola rozmowa zaczyna nową rozmowę.
 
-Wynik WYNIKI/<id>.json ma pola wiadomosc, folder, rozmowa, kod, tury (tekst, odmowy i blad każdej tury po kolei),
-powod, log i koniec. Gdy tura uruchomiła autopilota (autopilot.py --w-tle dopisuje do
+Wynik WYNIKI/<id>.json ma pola wiadomosc, folder, rozmowa, kod, tury (tekst, odmowy, blad i koszt każdej tury po
+kolei; koszt to total_cost_usd z wyjścia claude w USD albo None), powod, log i koniec. Gdy tura uruchomiła autopilota (autopilot.py --w-tle dopisuje do
 .autopilot-local/<id>/wyjscie.log), wykonawca czeka, aż wywołanie zwolni blokadę stan.lock (odczyt /proc/locks),
 potem wznawia tę samą rozmowę wiadomością o końcu autopilota i dopisuje kolejną turę do tego samego wyniku.
 
@@ -52,8 +52,11 @@ POLA_OPCJONALNE = ("rozmowa",)
 MAKS_PLIK = 64 * 1024
 MAKS_TRESC = 20000
 
-# Wywołanie tury. Reguła zezwala sesji uruchomić autopilota laboratorium pełną ścieżką (Z6).
+# Wywołanie tury. Reguły zezwalają sesji uruchomić pełną ścieżką autopilota laboratorium (Z6) i polecenie makiety
+# laboratorium (bramka i zrzuty w przypiętym obrazie przeglądarki bez sieci), także gdy tryb auto nie przepuściłby
+# docker run.
 REGULA_AUTOPILOTA = "Bash(python3 /home/fabryka/fabryka/scripts/autopilot.py:*)"
+REGULA_MAKIETY = "Bash(python3 /home/fabryka/fabryka/scripts/makieta.py:*)"
 SESJA_SERWERA = (
     "Rozmówcą w tej rozmowie jest obserwator, który pisze w imieniu człowieka. Działaj według "
     "/home/fabryka/fabryka/docs/sesja-glowna.md, sekcja „Na serwerze: rozmowa przez obserwatora”."
@@ -391,7 +394,7 @@ def przygotuj_folder(folder):
 
 def polecenie_tury(rozmowa, nowa):
     return ["claude", "-p", "--output-format", "json", "--permission-mode", "auto",
-            "--allowedTools", REGULA_AUTOPILOTA, "--disallowedTools", "AskUserQuestion",
+            "--allowedTools", REGULA_AUTOPILOTA, REGULA_MAKIETY, "--disallowedTools", "AskUserQuestion",
             "--append-system-prompt", SESJA_SERWERA, "--session-id" if nowa else "--resume", rozmowa]
 
 
@@ -423,11 +426,13 @@ def tura(folder, tekst, rozmowa, nowa, log, biezacy):
     if not isinstance(dane, dict):
         dopisz_do_logu(log, "\nskrzynka.py: wyjście claude bez poprawnego JSON:\n"
                        + wyjscie.decode("utf-8", errors="replace") + "\n")
-        return ({"tekst": None, "odmowy": [], "blad": True}, None,
+        return ({"tekst": None, "odmowy": [], "blad": True, "koszt": None}, None,
                 f"claude zakończył się kodem {proces.returncode} bez poprawnego JSON")
     odmowy = dane.get("permission_denials")
+    koszt = dane.get("total_cost_usd")
     wpis = {"tekst": dane.get("result"), "odmowy": odmowy if isinstance(odmowy, list) else [],
-            "blad": bool(dane.get("is_error"))}
+            "blad": bool(dane.get("is_error")),
+            "koszt": koszt if isinstance(koszt, (int, float)) and not isinstance(koszt, bool) else None}
     sesja = dane.get("session_id")
     sesja = sesja if isinstance(sesja, str) and ROZMOWA.fullmatch(sesja) else None
     if proces.returncode != 0 or wpis["blad"]:
