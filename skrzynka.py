@@ -12,10 +12,21 @@ PROJEKTY/<projekt> z nazwą według wzorca ZMIANA), tekst (zwykły tekst do sesj
 rozmowy do wznowienia). Wykonawca bierze blokadę folderu i uruchamia w nim jedną turę claude -p: tekst idzie na
 wejście standardowe, nigdy przez powłokę ani argument. Wiadomość bez pola rozmowa zaczyna nową rozmowę.
 
-Wynik WYNIKI/<id>.json ma pola wiadomosc, folder, rozmowa, kod, tury (tekst, odmowy, blad i koszt każdej tury po
-kolei; koszt to total_cost_usd z wyjścia claude w USD albo None), powod, log i koniec. Gdy tura uruchomiła autopilota (autopilot.py --w-tle dopisuje do
+Wynik WYNIKI/<id>.json ma pola wiadomosc, folder, rozmowa, kod, tury (tekst, odmowy, blad, koszt i licznik każdej
+tury po kolei), powod, log i koniec. licznik to total_cost_usd z wyjścia claude w USD (licznik całej rozmowy, rośnie
+także po --resume) albo None. koszt to koszt tej tury: licznik minus licznik rozmowy przed turą, albo None, gdy
+któregoś nie znamy albo różnica jest ujemna. Licznik przed turą: 0 dla nowej rozmowy, licznik poprzedniej tury tej
+samej wiadomości, a dla pierwszej tury wiadomości z polem rozmowa licznik ostatniej tury najnowszego wcześniejszego
+wyniku tej rozmowy w WYNIKI (wynik bez tur pomija; w starym wyniku bez pola licznik jego koszt, który był wtedy
+licznikiem). Gdy tura uruchomiła autopilota (autopilot.py --w-tle dopisuje do
 .autopilot-local/<id>/wyjscie.log), wykonawca czeka, aż wywołanie zwolni blokadę stan.lock (odczyt /proc/locks),
 potem wznawia tę samą rozmowę wiadomością o końcu autopilota i dopisuje kolejną turę do tego samego wyniku.
+
+Znacznik WYNIKI/<id>.start (pid i poczatek pracy) powstaje po blokadzie folderu i po założeniu folderu, więc znacznik
+bez folderu znaczy usunięty folder. Przy każdym wykonaj, po blokadzie folderu, wykonawca przenosi do ARCHIWUM
+(WYNIKI/archiwum, 0750) każdy znacznik bez wyniku, którego folder wiadomości nie istnieje albo jest folderem
+bieżącej wiadomości (nowa wiadomość zastępuje przerwaną pracę), a praca nie żyje (nie ma procesu z pid albo jego
+argumenty nie kończą się na wykonaj <id>). Nic nie kasuje; identyfikator z ARCHIWUM zostaje zajęty.
 
 Foldery i konto są stałymi modułu; testy podmieniają je w procesie. Plik nie czyta zmiennych środowiska
 do wyboru folderów.
@@ -37,6 +48,7 @@ import uuid
 
 SKRZYNKA = "/var/lib/fabryka-serwer/skrzynka"
 WYNIKI = "/var/lib/fabryka-serwer/wyniki"
+ARCHIWUM = WYNIKI + "/archiwum"
 DOM = "/home/fabryka"
 LAB = "/home/fabryka/fabryka"
 PROJEKTY = DOM + "/projekty"
@@ -52,11 +64,8 @@ POLA_OPCJONALNE = ("rozmowa",)
 MAKS_PLIK = 64 * 1024
 MAKS_TRESC = 20000
 
-# Wywołanie tury. Reguły zezwalają sesji uruchomić pełną ścieżką autopilota laboratorium (Z6) i polecenie makiety
-# laboratorium (bramka i zrzuty w przypiętym obrazie przeglądarki bez sieci), także gdy tryb auto nie przepuściłby
-# docker run.
+# Wywołanie tury. Reguła zezwala sesji uruchomić pełną ścieżką autopilota laboratorium (Z6).
 REGULA_AUTOPILOTA = "Bash(python3 /home/fabryka/fabryka/scripts/autopilot.py:*)"
-REGULA_MAKIETY = "Bash(python3 /home/fabryka/fabryka/scripts/makieta.py:*)"
 SESJA_SERWERA = (
     "Rozmówcą w tej rozmowie jest obserwator, który pisze w imieniu człowieka. Działaj według "
     "/home/fabryka/fabryka/docs/sesja-glowna.md, sekcja „Na serwerze: rozmowa przez obserwatora”."
@@ -153,10 +162,12 @@ def sciezka_wyniku(id_wiadomosci, koncowka):
 
 
 def problem_wolnego(id_wiadomosci):
-    """Powód odmowy, gdy wiadomość już ma plik startu albo wyniku (wykonana albo trwa); inaczej None."""
-    for koncowka in (".start", ".json"):
-        if os.path.lexists(sciezka_wyniku(id_wiadomosci, koncowka)):
-            return f"wiadomość {id_wiadomosci} już wykonana albo trwa: jest {sciezka_wyniku(id_wiadomosci, koncowka)}"
+    """Powód odmowy, gdy wiadomość już ma plik startu albo wyniku (wykonana albo trwa) albo znacznik w ARCHIWUM;
+    inaczej None."""
+    for sciezka in (sciezka_wyniku(id_wiadomosci, ".start"), sciezka_wyniku(id_wiadomosci, ".json"),
+                    os.path.join(ARCHIWUM, id_wiadomosci + ".start")):
+        if os.path.lexists(sciezka):
+            return f"wiadomość {id_wiadomosci} już wykonana albo trwa: jest {sciezka}"
     return None
 
 
@@ -314,6 +325,133 @@ def czekaj_na_autopilota(folder):
         time.sleep(ODSTEP)
 
 
+# --- martwe znaczniki --------------------------------------------------------------------------------------------
+
+def praca_zyje(pid, id_wiadomosci):
+    """Prawda, gdy proces pid żyje, a jego argumenty kończą się na wykonaj <id> (nie podmieniony numer)."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as plik:
+            argumenty = plik.read().split(b"\0")
+    except OSError:
+        return False
+    if argumenty and argumenty[-1] == b"":
+        argumenty.pop()
+    return argumenty[-2:] == [b"wykonaj", id_wiadomosci.encode("ascii")]
+
+
+def _pid_znacznika(sciezka):
+    try:
+        with open(sciezka, encoding="utf-8") as plik:
+            dane = json.load(plik)
+    except (OSError, ValueError):
+        return None
+    return dane.get("pid") if isinstance(dane, dict) else None
+
+
+def _folder_wiadomosci(id_wiadomosci):
+    """Folder z SKRZYNKA/<id>.json: False bez pliku wiadomości; None, gdy pliku nie da się odczytać (wtedy znacznik
+    zostaje)."""
+    try:
+        fd = os.open(os.path.join(SKRZYNKA, id_wiadomosci + ".json"), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    try:
+        bajty = os.read(fd, MAKS_PLIK + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    dane, powod = wczytaj(bajty)
+    if powod or not isinstance(dane, dict) or not isinstance(dane.get("folder"), str):
+        return None
+    return dane["folder"]
+
+
+def archiwizuj_martwe(folder=None):
+    """Przenosi do ARCHIWUM każdy WYNIKI/<id>.start bez WYNIKI/<id>.json, którego folder wiadomości nie istnieje
+    albo jest folderem `folder` (bieżącej wiadomości, pod jej blokadą), a praca nie żyje; zwraca nazwy przeniesionych
+    plików. Nic nie kasuje, nie nadpisuje pliku w ARCHIWUM, a błąd przy jednym znaczniku pomija tylko ten znacznik."""
+    przeniesione = []
+    try:
+        wpisy = sorted(os.scandir(WYNIKI), key=lambda wpis: wpis.name)
+    except OSError:
+        return przeniesione
+    for wpis in wpisy:
+        id_wiadomosci = wpis.name[:-len(".start")]
+        if not wpis.name.endswith(".start") or not poprawny_id(id_wiadomosci):
+            continue
+        try:
+            if not wpis.is_file(follow_symlinks=False) or os.path.lexists(sciezka_wyniku(id_wiadomosci, ".json")):
+                continue
+            folder_znacznika = _folder_wiadomosci(id_wiadomosci)
+            if folder_znacznika is None:
+                continue
+            if folder_znacznika is not False and os.path.isdir(folder_znacznika) and (
+                    folder is None or os.path.normpath(folder_znacznika) != os.path.normpath(folder)):
+                continue
+            if praca_zyje(_pid_znacznika(wpis.path), id_wiadomosci):
+                continue
+            if os.path.islink(ARCHIWUM):
+                continue
+            if not os.path.isdir(ARCHIWUM):
+                os.mkdir(ARCHIWUM, 0o750)
+                os.chmod(ARCHIWUM, 0o750)
+            cel = os.path.join(ARCHIWUM, wpis.name)
+            if os.path.lexists(cel):
+                continue
+            os.rename(wpis.path, cel)
+            przeniesione.append(wpis.name)
+        except OSError:
+            continue
+    return przeniesione
+
+
+# --- koszt tury --------------------------------------------------------------------------------------------------
+
+def _liczba(wartosc):
+    return isinstance(wartosc, (int, float)) and not isinstance(wartosc, bool)
+
+
+def koszt_tury(licznik, poprzedni):
+    """Licznik minus poprzedni licznik rozmowy, gdy oba są liczbami, a różnica nie jest ujemna; inaczej None."""
+    if _liczba(licznik) and _liczba(poprzedni) and licznik - poprzedni >= 0:
+        return licznik - poprzedni
+    return None
+
+
+def poprzedni_licznik(rozmowa, id_wiadomosci):
+    """Licznik rozmowy po ostatniej turze najnowszego wyniku tej rozmowy w WYNIKI z identyfikatorem mniejszym niż
+    id_wiadomosci (wynik bez tur pomija; bez pola licznik bierze koszt starego wyniku); None bez takiego wyniku."""
+    try:
+        nazwy = os.listdir(WYNIKI)
+    except OSError:
+        return None
+    for nazwa in sorted(nazwy, reverse=True):
+        id_wyniku = nazwa[:-len(".json")]
+        if not nazwa.endswith(".json") or not poprawny_id(id_wyniku) or id_wyniku >= id_wiadomosci:
+            continue
+        try:
+            with open(os.path.join(WYNIKI, nazwa), encoding="utf-8") as plik:
+                dane = json.load(plik)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(dane, dict) or dane.get("rozmowa") != rozmowa:
+            continue
+        tury = dane.get("tury")
+        if not isinstance(tury, list) or not tury:
+            continue
+        ostatnia = tury[-1]
+        if not isinstance(ostatnia, dict):
+            return None
+        wartosc = ostatnia["licznik"] if "licznik" in ostatnia else ostatnia.get("koszt")
+        return wartosc if _liczba(wartosc) else None
+    return None
+
+
 # --- wykonanie ---------------------------------------------------------------------------------------------------
 
 class Przerwanie(Exception):
@@ -394,7 +532,7 @@ def przygotuj_folder(folder):
 
 def polecenie_tury(rozmowa, nowa):
     return ["claude", "-p", "--output-format", "json", "--permission-mode", "auto",
-            "--allowedTools", REGULA_AUTOPILOTA, REGULA_MAKIETY, "--disallowedTools", "AskUserQuestion",
+            "--allowedTools", REGULA_AUTOPILOTA, "--disallowedTools", "AskUserQuestion",
             "--append-system-prompt", SESJA_SERWERA, "--session-id" if nowa else "--resume", rozmowa]
 
 
@@ -426,13 +564,14 @@ def tura(folder, tekst, rozmowa, nowa, log, biezacy):
     if not isinstance(dane, dict):
         dopisz_do_logu(log, "\nskrzynka.py: wyjście claude bez poprawnego JSON:\n"
                        + wyjscie.decode("utf-8", errors="replace") + "\n")
-        return ({"tekst": None, "odmowy": [], "blad": True, "koszt": None}, None,
+        return ({"tekst": None, "odmowy": [], "blad": True, "koszt": None, "licznik": None}, None,
                 f"claude zakończył się kodem {proces.returncode} bez poprawnego JSON")
     odmowy = dane.get("permission_denials")
-    koszt = dane.get("total_cost_usd")
+    licznik = dane.get("total_cost_usd")
+    # koszt tury liczy wykonaj z licznika i licznika rozmowy przed turą.
     wpis = {"tekst": dane.get("result"), "odmowy": odmowy if isinstance(odmowy, list) else [],
-            "blad": bool(dane.get("is_error")),
-            "koszt": koszt if isinstance(koszt, (int, float)) and not isinstance(koszt, bool) else None}
+            "blad": bool(dane.get("is_error")), "koszt": None,
+            "licznik": licznik if _liczba(licznik) else None}
     sesja = dane.get("session_id")
     sesja = sesja if isinstance(sesja, str) and ROZMOWA.fullmatch(sesja) else None
     if proces.returncode != 0 or wpis["blad"]:
@@ -474,10 +613,15 @@ def wykonaj(id_wiadomosci):
             wynik.update(kod=KOD_ZAJETE, powod=f"folder zajęty: {folder} (trwa tura albo czekanie na autopilota)")
             return KOD_ZAJETE
 
+        try:
+            archiwizuj_martwe(folder)
+        except Exception:  # noqa: BLE001 — archiwum nie przerywa pracy wiadomości
+            dopisz_do_logu(log, "\nskrzynka.py: błąd archiwum znaczników:\n" + traceback.format_exc())
+        # Folder przed znacznikiem: znacznik bez folderu znaczy usunięty folder (wyslij.sh, kod 6).
+        przygotuj_folder(folder)
         zapisz_nowy(sciezka_wyniku(id_wiadomosci, ".start"),
                     (json.dumps({"pid": os.getpid(), "poczatek": teraz()}) + "\n").encode("utf-8"))
         wynik["log"] = log
-        przygotuj_folder(folder)
 
         rozmowa = dane.get("rozmowa")
         nowa = rozmowa is None
@@ -485,9 +629,12 @@ def wykonaj(id_wiadomosci):
             rozmowa = str(uuid.uuid4())
         wynik["rozmowa"] = rozmowa
         tekst = dane["tekst"]
+        poprzedni = 0 if nowa else poprzedni_licznik(rozmowa, id_wiadomosci)
         for numer in range(MAKS_WZNOWIEN + 1):
             przed = stan_logow(folder)
             wpis, sesja, blad = tura(folder, tekst, rozmowa, nowa and numer == 0, log, biezacy)
+            wpis["koszt"] = koszt_tury(wpis["licznik"], poprzedni)
+            poprzedni = wpis["licznik"]
             wynik["tury"].append(wpis)
             if sesja:
                 rozmowa = wynik["rozmowa"] = sesja

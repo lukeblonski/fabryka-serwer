@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.10"
+WERSJA="v1.0.11"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -25,7 +25,7 @@ GITLEAKS_SUMA="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 MISE_WERSJA="2026.11.4"
 MISE_SUMA="0296d9cba9324106d4e0962bb94a2072902f3658813aeb3b09504947bb8ddc2b"
 
-# Obraz przeglądarki do makiet i testów aplikacji, przypięty tagiem i skrótem: ten sam co IMAGE w scripts/makieta.py
+# Obraz przeglądarki do testów aplikacji, przypięty tagiem i skrótem: ten sam co IMAGE w scripts/makieta.py
 # laboratorium. PRZEGLADARKA to ścieżka przeglądarki w obrazie (BROWSER w makieta.py), zależna od wersji obrazu.
 # PROBA_PRZEGLADARKI to próbny plik kontroli: wypisuje w treści strony parametr state z adresu.
 OBRAZ_PRZEGLADARKI="mcr.microsoft.com/playwright:v1.65.0-noble@sha256:6e3fb709361521eb27161606e6da6d2674e5e89fa16516cb37d6fdd91372273d"
@@ -421,14 +421,14 @@ for plik in .profile .bashrc; do
   dopisz_blok fabryka "$FAB_HOME/$plik" "$ZNACZNIK_DOCKER" "$BLOK_DOCKERA"
 done
 
-# Jedna przeglądarka dla makiet i testów aplikacji: obraz pobiera konto fabryka raz; kolejne uruchomienie go nie pobiera.
+# Przeglądarka do testów aplikacji: obraz pobiera konto fabryka raz; kolejne uruchomienie go nie pobiera.
 if docker_fabryki image inspect "$OBRAZ_PRZEGLADARKI" > /dev/null 2>&1; then
-  gotowe "obraz przeglądarki do makiet i testów już jest"
+  gotowe "obraz przeglądarki do testów aplikacji już jest"
 else
-  napisz "  Pobieram obraz przeglądarki do makiet i testów: ok. 1 GB pobierania, 3,6 GB na dysku."
+  napisz "  Pobieram obraz przeglądarki do testów aplikacji: ok. 1 GB pobierania, 3,6 GB na dysku."
   docker_fabryki pull "$OBRAZ_PRZEGLADARKI" \
     || przerwij "Nie mogę pobrać obrazu przeglądarki $OBRAZ_PRZEGLADARKI. Sprawdź sieć i wolne miejsce na dysku (df -h), potem uruchom instalator ponownie."
-  gotowe "obraz przeglądarki do makiet i testów pobrany"
+  gotowe "obraz przeglądarki do testów aplikacji pobrany"
 fi
 
 # --- 5. logowania ------------------------------------------------------------------------------------------
@@ -791,10 +791,10 @@ docker_bez_roota() {
   return 1
 }
 
-# przegladarka_makiet: dodatni sygnał; konto fabryka zapisuje próbny plik w swoim folderze tymczasowym w /tmp,
+# przegladarka_testow: dodatni sygnał; konto fabryka zapisuje próbny plik w swoim folderze tymczasowym w /tmp,
 # a kontener obrazu przeglądarki bez sieci otwiera go z dysku z parametrem w adresie: --dump-dom ma tekst parametru,
 # a --screenshot daje plik PNG. Folder sprząta konto fabryka; root nie otwiera ścieżek pod /home.
-przegladarka_makiet() {
+przegladarka_testow() {
   local folder dom naglowek wynik=1
   folder=$(sudo -u fabryka mktemp -d /tmp/fabryka-przegladarka.XXXXXX) || return 1
   if printf '%s' "$PROBA_PRZEGLADARKI" | sudo -u fabryka tee "$folder/proba.html" > /dev/null \
@@ -926,9 +926,9 @@ sprawdz "Claude fabryki zalogowany" "uruchom instalator ponownie i zaloguj konto
   sudo -u fabryka "$FAB_CLAUDE" auth status
 sprawdz "GitHub fabryki zalogowany" "sudo -u fabryka gh auth status" sudo -u fabryka gh auth status
 sprawdz "Docker bez roota na koncie fabryka" "systemctl --user status docker na koncie fabryka" docker_bez_roota
-sprawdz "przeglądarka do makiet i testów otwiera bez sieci próbny plik z parametrem w adresie i robi jego zrzut" \
+sprawdz "przeglądarka do testów aplikacji otwiera bez sieci próbny plik z parametrem w adresie i robi jego zrzut" \
   "obraz przeglądarki na koncie fabryka (docker image inspect $OBRAZ_PRZEGLADARKI); uruchom instalator ponownie" \
-  przegladarka_makiet
+  przegladarka_testow
 sprawdz "mise dla konta fabryka ($MISE_WERSJA)" \
   "sudo -u fabryka mise --version i plik /usr/local/bin/mise" mise_w_wersji_instalatora
 sprawdz "gitleaks w wersji z szablonu CI ($GITLEAKS_WERSJA)" \
