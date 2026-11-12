@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.11"
+WERSJA="v1.0.12"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -51,9 +51,11 @@ PLIKI=(
 
 LIB=/usr/local/lib/fabryka-serwer
 # Foldery wiadomości obserwatora: skrzynkę pisze tylko obserwator, wyniki tylko fabryka.
+# W przekazaniu obserwator kładzie plik z wynikiem pracy w panelu usługi, a fabryka go czyta i usuwa.
 SERWER=/var/lib/fabryka-serwer
 SKRZYNKA="$SERWER/skrzynka"
 WYNIKI="$SERWER/wyniki"
+PRZEKAZANIE="$SERWER/przekazanie"
 JEDNOSTKI=/etc/systemd/system
 SUDOERS_CEL=/etc/sudoers.d/fabryka-obserwator
 APPARMOR_ROOTLESSKIT=/etc/apparmor.d/usr.bin.rootlesskit
@@ -333,7 +335,9 @@ folder_systemu() {
 folder_systemu "$SERWER" root:root 0755
 folder_systemu "$SKRZYNKA" obserwator:fabryka 2750
 folder_systemu "$WYNIKI" fabryka:fabryka 0750
-gotowe "foldery $SKRZYNKA i $WYNIKI założone"
+# Przekazanie: obserwator kładzie plik, fabryka czyta go i usuwa (grupa fabryka z zapisem, setgid, bez bitu sticky).
+folder_systemu "$PRZEKAZANIE" obserwator:fabryka 2770
+gotowe "foldery $SKRZYNKA, $WYNIKI i $PRZEKAZANIE założone"
 # Folder z v1.0.4, którego od v1.0.5 nie ma: zgody zapisuje autopilot jak na Macu.
 rm -rf --one-file-system -- "$SERWER/zaufane" || przerwij "Nie mogę usunąć folderu $SERWER/zaufane z v1.0.4."
 gotowe "folderu $SERWER/zaufane nie ma"
@@ -470,6 +474,9 @@ sudo -u fabryka gh auth setup-git
 
 etap 6 "Folder obserwatora, umowa i ustawienia"
 sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude"
+# Klucze usług od człowieka (umowa obserwatora, „Panele usług”): folder tylko konta obserwator.
+sudo -u obserwator mkdir -p "$OBS_DIR/klucze"
+sudo -u obserwator chmod 0700 "$OBS_DIR/klucze"
 for skill in "${SKILLE_OBSERWATORA[@]}"; do
   sudo -u obserwator mkdir -p "$OBS_SKILLE/$skill"
 done
@@ -882,6 +889,47 @@ tylko_obserwator_pisze() {
   return "$wynik"
 }
 
+# klucze_obserwatora: dodatni sygnał; folder kluczy obserwatora ma tryb 0700 (czyta go konto obserwator), a konto
+# fabryka go nie czyta. Root nie otwiera ścieżek pod /home.
+klucze_obserwatora() {
+  local tryb
+  tryb=$(sudo -u obserwator stat -c %a "$OBS_DIR/klucze") || return 1
+  [ "$tryb" = "700" ] || return 1
+  ! sudo -u fabryka test -r "$OBS_DIR/klucze"
+}
+
+# obserwator_przekazuje_fabryce <folder>: dodatni sygnał czterech warunków. Folder ma właściciela obserwator:fabryka
+# i tryb 2770; obserwator tworzy plik próbny z umask 027 pod losową nazwą jednym otwarciem, które nie idzie za
+# dowiązaniem (O_CREAT|O_EXCL|O_NOFOLLOW; nazwa nie stoi w argumentach procesu), fabryka go czyta i usuwa, a pliku
+# potem nie ma. Kod 0 tylko, gdy zachodzą wszystkie cztery; plik, który został po próbie, sprząta root.
+obserwator_przekazuje_fabryce() {
+  local folder="$1" wynik=0 prawa probny
+  local tworz='import os, secrets, sys
+p = os.path.join(sys.argv[1], ".proba-przekazania-" + secrets.token_hex(8))
+os.close(os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640))
+print(p)'
+  prawa=$(stat -c '%U:%G %a' "$folder") || return 1
+  [ "$prawa" = "obserwator:fabryka 2770" ] || return 1
+  if ! probny=$( (umask 027; sudo -u obserwator python3 -I -c "$tworz" "$folder") 2> /dev/null); then
+    return 1
+  fi
+  case "$probny" in
+    "$folder"/.proba-przekazania-*) ;;
+    *) return 1 ;;
+  esac
+  if ! sudo -u fabryka cat "$probny" > /dev/null 2>&1; then
+    wynik=1
+  fi
+  if ! sudo -u fabryka rm -f "$probny" 2> /dev/null; then
+    wynik=1
+  fi
+  if [ -e "$probny" ] || [ -L "$probny" ]; then
+    wynik=1
+    rm -f "$probny"
+  fi
+  return "$wynik"
+}
+
 gitleaks_w_wersji_szablonu() {
   local wynik
   wynik=$(sudo -u fabryka gitleaks version 2>&1) || return 1
@@ -954,6 +1002,11 @@ sprawdz "proces remote-control obserwatora działa i nie czeka na pytanie (y/n)"
 sprawdz "umask 022 kont fabryka i obserwator" "pole GECOS: getent passwd fabryka obserwator" umask_kont
 sprawdz "skrzynkę pisze i czyści tylko obserwator, fabryka nie zapisuje ani nie usuwa" \
   "właściciel obserwator:fabryka i tryb 2750 folderu $SKRZYNKA (ls -ld $SKRZYNKA)" tylko_obserwator_pisze "$SKRZYNKA"
+sprawdz "klucze obserwatora 0700, fabryka ich nie czyta" \
+  "tryb 0700 folderu $OBS_DIR/klucze (sudo -u obserwator ls -ld $OBS_DIR/klucze)" klucze_obserwatora
+sprawdz "przekazanie: obserwator kładzie, fabryka czyta i usuwa" \
+  "właściciel obserwator:fabryka i tryb 2770 folderu $PRZEKAZANIE (ls -ld $PRZEKAZANIE)" \
+  obserwator_przekazuje_fabryce "$PRZEKAZANIE"
 sprawdz "folderu $SERWER/zaufane z v1.0.4 nie ma" "ls -ld $SERWER/zaufane" bez_zaufanych
 sprawdz "obserwator uruchamia skrypt startowy fabryki" "plik $SUDOERS_CEL i $LIB/start-fabryki.sh" \
   sudo -u obserwator sudo -n -u fabryka "$LIB/start-fabryki.sh"

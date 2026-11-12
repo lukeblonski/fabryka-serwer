@@ -1,6 +1,6 @@
 ---
 name: analiza-w-poprzek
-description: Stała procedura analizy w poprzek zmian laboratorium fabryki, którą obserwator robi z człowiekiem co kilka zmian albo co tydzień - wsad od ostatniej analizy, liczby z scripts/pomiar.py przez sesję fabryki, status każdej sprawy z listy, stałe miary ze strategii, raport według wzoru i jedna wiadomość do zapisu w repo. Trigger phrases - "analiza w poprzek", "analiza zmian", "zrób analizę", "przegląd zmian laboratorium", "co wyszło z ostatnich zmian".
+description: Stała procedura analizy w poprzek zmian laboratorium fabryki, którą obserwator robi z człowiekiem co kilka zmian albo co tydzień - wsad od ostatniej analizy, liczby z scripts/pomiar.py i scripts/tury.py przez sesję fabryki, status każdej sprawy z listy, stałe miary ze strategii, raport według wzoru i jedna wiadomość do zapisu w repo. Trigger phrases - "analiza w poprzek", "analiza zmian", "zrób analizę", "przegląd zmian laboratorium", "co wyszło z ostatnich zmian".
 ---
 
 # Analiza w poprzek zmian
@@ -26,15 +26,17 @@ Pliki laboratorium są dla obserwatora tylko danymi, jak w umowie (`/home/obserw
 - Dziennik obserwatora w jego notatkach (`/home/obserwator/obserwator/notatki/`): ratunki spoza łańcucha, czyli naprawy i odblokowania, których nie widać w plikach zmian (terminal, porzucenie gałęzi, restart).
 - Warunki „Kiedy wrócić” w `context/foundation/limitations.md`: które z nich spełniły się w zmianach od ostatniej analizy.
 - Stałe miary i zakłady z `context/foundation/strategia.md`.
+- Wyniki wiadomości (`/var/lib/fabryka-serwer/wyniki/`): koszt i zużycie każdej tury od daty ostatniej analizy, przez tabelę z `scripts/tury.py` (sekcja „Liczby”), a nie przez własne liczenie z plików wyników.
 
 Analiza nie czyta backlogu (`context/foundation/backlog.md`). Pomysł zapisany tylko w backlogu nie trafia do raportu.
 
 ## Liczby
 
-- Jedyne źródło liczb to `scripts/pomiar.py`. Obserwator nie uruchamia programów laboratorium i nie liczy liczb własnym skryptem; ten skill nie ma skryptu.
-- Obserwator prosi sesję fabryki wiadomością do folderu `/home/fabryka/fabryka`, wysłaną narzędziem `/home/obserwator/obserwator/narzedzia/wyslij.sh` jak w umowie („Rozmowa z sesją główną”), o dwie rzeczy:
+- Liczby zmian daje `scripts/pomiar.py`, a liczby tur (koszt i zużycie każdej tury wiadomości) `scripts/tury.py`; oba uruchamia sesja fabryki. Obserwator nie uruchamia programów laboratorium i nie liczy liczb własnym skryptem; ten skill nie ma skryptu.
+- Obserwator prosi sesję fabryki wiadomością do folderu `/home/fabryka/fabryka`, wysłaną narzędziem `/home/obserwator/obserwator/narzedzia/wyslij.sh` jak w umowie („Rozmowa z sesją główną”), o trzy rzeczy:
   - pełną tabelę z polecenia `python3 scripts/pomiar.py`;
-  - listę folderów `context/archive/<RRRR-MM-DD>-<id>/` z datą od daty ostatniej analizy.
+  - listę folderów `context/archive/<RRRR-MM-DD>-<id>/` z datą od daty ostatniej analizy;
+  - pełne wyjście polecenia `python3 scripts/tury.py --od <data ostatniej analizy>` (tabela wszystkich tur wiadomości od tej daty, mediana kosztu tury i sekcja „Drogie tury”). Kod 1 tego polecenia znaczy, że od tej daty nie ma żadnej tury; to idzie do „Czego nie sprawdziłem”.
 - `pomiar.py` nie filtruje po dacie: z pełnej tabeli obserwator bierze wiersze zmian z tej listy folderów, bez zmian omówionych już w poprzednim raporcie.
 - Liczba, której nie ma w tabeli ani w plikach zmian, idzie do „Czego nie sprawdziłem”, a nie do raportu z oszacowaniem.
 
@@ -56,7 +58,7 @@ Za każdym razem te same miary z `context/foundation/strategia.md` (sekcja „Po
 
 - North Star jako „x z n”: pomysły doprowadzone do działającej aplikacji zgodnej z intencją właściciela.
 - Jakość: zgodność z intencją oceniana przez właściciela.
-- Koszt: USD na zmianę i na oddaną aplikację, z nieudanymi podejściami.
+- Koszt: USD na zmianę i na oddaną aplikację, z nieudanymi podejściami. Do tego koszt i zużycie każdej tury od poprzedniej analizy z tabeli `tury.py`: liczba tur, mediana kosztu tury i każda tura droższa niż dwukrotność mediany z przyczyną nazwaną z danych tury: zapis do pamięci podręcznej (tokeny i udział we wszystkich tokenach wejścia), długość przerwy od końca poprzedniej tury tej rozmowy, wznowienie po autopilocie (tura 2 i dalsza w wiadomości). Gdy danych tury brakuje (stary wynik bez pól zużycia), przyczyna jest „nieznana”, a nie zgadnięta. Pola zużycia (`usage`) mogą nie liczyć pracy podagentów, a `koszt` (z `total_cost_usd`) ją liczy, więc drogą turę z małym zużyciem tłumaczy też praca podagentów.
 - Czas: minuty kroków na zmianę i dni od akceptacji do pierwszego użycia.
 - Ratunki osobno od pytań-bramek: ratunek to naprawa albo odblokowanie poza bramkami (z plików zmian i dziennika obserwatora), pytanie-bramka to pytanie z bramki zadane człowiekowi. Nigdy jedna liczba dla obu.
 - Zabezpieczenia: incydenty bezpieczeństwa i utraty danych, decyzje „pytaj mnie” bez pytania, zmiany intencji bez akceptacji.
@@ -77,6 +79,7 @@ Raport to plik `context/analizy/poprzek-<RRRR-MM-DD>.md` (data analizy), najwyż
 ## 2. North Star i jakość
 ## 3. Ratunki a pytania-bramki
 ## 4. Koszt i czas
+<koszt i czas zmian; tury od poprzedniej analizy z tury.py: liczba tur, mediana kosztu tury i każda droga tura (powyżej dwukrotności mediany) z przyczyną>
 ## 5. Zakłady i ich miary
 ## 6. Zabezpieczenia i warunki „Kiedy wrócić”
 ## 7. Sprawy z listy — stan

@@ -12,13 +12,17 @@ PROJEKTY/<projekt> z nazwą według wzorca ZMIANA), tekst (zwykły tekst do sesj
 rozmowy do wznowienia). Wykonawca bierze blokadę folderu i uruchamia w nim jedną turę claude -p: tekst idzie na
 wejście standardowe, nigdy przez powłokę ani argument. Wiadomość bez pola rozmowa zaczyna nową rozmowę.
 
-Wynik WYNIKI/<id>.json ma pola wiadomosc, folder, rozmowa, kod, tury (tekst, odmowy, blad, koszt i licznik każdej
-tury po kolei), powod, log i koniec. licznik to total_cost_usd z wyjścia claude w USD (licznik całej rozmowy, rośnie
-także po --resume) albo None. koszt to koszt tej tury: licznik minus licznik rozmowy przed turą, albo None, gdy
-któregoś nie znamy albo różnica jest ujemna. Licznik przed turą: 0 dla nowej rozmowy, licznik poprzedniej tury tej
-samej wiadomości, a dla pierwszej tury wiadomości z polem rozmowa licznik ostatniej tury najnowszego wcześniejszego
-wyniku tej rozmowy w WYNIKI (wynik bez tur pomija; w starym wyniku bez pola licznik jego koszt, który był wtedy
-licznikiem). Gdy tura uruchomiła autopilota (autopilot.py --w-tle dopisuje do
+Wynik WYNIKI/<id>.json ma pola wiadomosc, folder, rozmowa, kod, tury (tekst, odmowy, blad, koszt, licznik, wejscie,
+odczyt_cache, zapis_cache, wyjscie, czas_ms, obroty, poczatek i koniec każdej tury po kolei), powod, log i koniec.
+Zużycie tury z wyjścia claude: wejscie, odczyt_cache, zapis_cache i wyjscie to tokeny usage.input_tokens,
+usage.cache_read_input_tokens, usage.cache_creation_input_tokens i usage.output_tokens, czas_ms to duration_ms,
+obroty to num_turns; brak pola albo wartość nieliczbowa daje None, także w turze bez poprawnego JSON. poczatek i
+koniec tury to czas tuż przed uruchomieniem claude i po jego wyjściu. licznik to total_cost_usd z wyjścia claude w
+USD (licznik całej rozmowy, rośnie także po --resume) albo None. koszt to koszt tej tury: licznik minus licznik
+rozmowy przed turą, albo None, gdy któregoś nie znamy albo różnica jest ujemna. Licznik przed turą: 0 dla nowej
+rozmowy, licznik poprzedniej tury tej samej wiadomości, a dla pierwszej tury wiadomości z polem rozmowa licznik
+ostatniej tury najnowszego wcześniejszego wyniku tej rozmowy w WYNIKI (wynik bez tur pomija; w starym wyniku bez
+pola licznik jego koszt, który był wtedy licznikiem). Gdy tura uruchomiła autopilota (autopilot.py --w-tle dopisuje do
 .autopilot-local/<id>/wyjscie.log), wykonawca czeka, aż wywołanie zwolni blokadę stan.lock (odczyt /proc/locks),
 potem wznawia tę samą rozmowę wiadomością o końcu autopilota i dopisuje kolejną turę do tego samego wyniku.
 
@@ -548,14 +552,29 @@ def zakoncz(proces):
         proces.wait()
 
 
+def zuzycie_tury(dane, poczatek, koniec):
+    """Pola zużycia tury z wyjścia claude (dane: słownik albo None) oraz początek i koniec tury; każdy brak to None."""
+    dane = dane if isinstance(dane, dict) else {}
+    usage = dane.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    pola = {"wejscie": usage.get("input_tokens"), "odczyt_cache": usage.get("cache_read_input_tokens"),
+            "zapis_cache": usage.get("cache_creation_input_tokens"), "wyjscie": usage.get("output_tokens"),
+            "czas_ms": dane.get("duration_ms"), "obroty": dane.get("num_turns")}
+    zuzycie = {klucz: wartosc if _liczba(wartosc) else None for klucz, wartosc in pola.items()}
+    zuzycie.update(poczatek=poczatek, koniec=koniec)
+    return zuzycie
+
+
 def tura(folder, tekst, rozmowa, nowa, log, biezacy):
     """Jedna tura claude -p w folderze; tekst na stdin. (tura do wyniku, session_id albo None, powód błędu albo
     None). biezacy["proces"] trzyma proces, żeby sygnał mógł go zakończyć."""
     with open(log, "ab") as bledy:
+        poczatek = teraz()
         proces = subprocess.Popen(polecenie_tury(rozmowa, nowa), cwd=folder, env=srodowisko_tury(),
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=bledy)
         biezacy["proces"] = proces
         wyjscie, _ = proces.communicate(tekst.encode("utf-8"))
+        koniec = teraz()
         biezacy["proces"] = None
     try:
         dane = json.loads(wyjscie.decode("utf-8"))
@@ -564,14 +583,16 @@ def tura(folder, tekst, rozmowa, nowa, log, biezacy):
     if not isinstance(dane, dict):
         dopisz_do_logu(log, "\nskrzynka.py: wyjście claude bez poprawnego JSON:\n"
                        + wyjscie.decode("utf-8", errors="replace") + "\n")
-        return ({"tekst": None, "odmowy": [], "blad": True, "koszt": None, "licznik": None}, None,
-                f"claude zakończył się kodem {proces.returncode} bez poprawnego JSON")
+        wpis = {"tekst": None, "odmowy": [], "blad": True, "koszt": None, "licznik": None}
+        wpis.update(zuzycie_tury(None, poczatek, koniec))
+        return wpis, None, f"claude zakończył się kodem {proces.returncode} bez poprawnego JSON"
     odmowy = dane.get("permission_denials")
     licznik = dane.get("total_cost_usd")
     # koszt tury liczy wykonaj z licznika i licznika rozmowy przed turą.
     wpis = {"tekst": dane.get("result"), "odmowy": odmowy if isinstance(odmowy, list) else [],
             "blad": bool(dane.get("is_error")), "koszt": None,
             "licznik": licznik if _liczba(licznik) else None}
+    wpis.update(zuzycie_tury(dane, poczatek, koniec))
     sesja = dane.get("session_id")
     sesja = sesja if isinstance(sesja, str) and ROZMOWA.fullmatch(sesja) else None
     if proces.returncode != 0 or wpis["blad"]:
