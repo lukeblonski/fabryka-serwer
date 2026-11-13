@@ -71,7 +71,8 @@ Na koniec przebiegu obserwator pisze człowiekowi jedną wiadomość:
 - co się stało: zmiana i jej wynik (`/home/fabryka/fabryka/context/przebiegi/<zmiana>.md` i log ostatniego polecenia);
 - co obejrzeć i jak: pliki, polecenie albo adres, i wiersze `#### Manual`, które czekają na człowieka;
 - co dalej: jedna rekomendacja;
-- lista spraw rozstrzygniętych przez obserwatora, jednym zdaniem każda, albo „brak”: linie z `rozstrzygnął: obserwator` w `## Pytania do człowieka` i linie zatrzymań z `decyzja obserwatora` albo `: obserwator` w polu `zrobiono`, z `change.md` zmiany (po archiwum w `context/archive/`) i z `## Zatrzymania po archiwum` w pliku przebiegu, oraz sprawy z granicą „sam, daje znać”.
+- lista spraw rozstrzygniętych przez obserwatora, jednym zdaniem każda, albo „brak”: linie z `rozstrzygnął: obserwator` w `## Pytania do człowieka` i linie zatrzymań z `decyzja obserwatora` albo `: obserwator` w polu `zrobiono`, z `change.md` zmiany (po archiwum w `context/archive/`) i z `## Zatrzymania po archiwum` w pliku przebiegu, oraz sprawy z granicą „sam, daje znać”;
+- sprawy bezpieczeństwa załatwione przez agenta, jednym zdaniem każda, albo „brak”: zdania spod linii „sprawy bezpieczeństwa załatwione przez agenta” z listy końca przebiegu sesji, dosłownie. W trakcie budowy obserwator o nich nie pisze.
 
 Gdy tekst fabryki (tury wyniku albo plik przebiegu) ma linię „Niesprawdzone na żywo: …”, wiadomość nie ma słów „gotowe” ani „działa” i powtarza tę linię dosłownie.
 
@@ -111,7 +112,7 @@ Gdy sprawa pasuje do kilku wierszy, obowiązuje wiersz z węższą granicą.
 | 2 | Zakres bez zmiany intencji (zawężenie, co z backlogu) | sam, daje znać |
 | 3 | Zmiana intencji albo kryteriów akceptacji | pytaj mnie |
 | 4 | Uwagi z przeglądu: zwykłe, które nie zatrzymały kroku; każdy wpis przeglądu albo triage'u w `## Wymaga Twojej decyzji`, który zatrzymał krok, to „pytaj mnie” (ani sesja, ani obserwator nie odpowiadają na niego sami) | sam, daje znać |
-| 5 | Uwagi z przeglądu dotyczące bezpieczeństwa i uprawnień (zmiana może pozwolić agentowi albo obcemu na więcej) | pytaj mnie |
+| 5 | Sprawy bezpieczeństwa z przeglądu albo z samonaprawy sesji, które agent załatwił sam według zasady A/B z polityki triage'u (poprawka albo najtańsze ograniczenie z terminem w rejestrze); sprawa A bez taniej poprawki to „pytaj mnie” (wpis, który zatrzymał krok, albo pytanie sesji), a poprawka, która dotyka pliku chronionego, wysyła dane, publikuje albo jest trudna do cofnięcia, idzie według swojego wiersza (10, 12, 13, 14, 15, 17) | sam, daje znać |
 | 6 | Przyjęcie samonaprawy, odmowy uprawnień | sam |
 | 7 | Wiersze ręczne, które obserwator może sam sprawdzić | sam, z zapisem „sprawdził obserwator” |
 | 8 | Płatne przebiegi zatwierdzone w intencji | sam |
@@ -147,8 +148,8 @@ Uwaga obserwatora nigdy nie jest zgodą człowieka tam, gdzie granica mówi „p
 ## Pamięć
 
 - Notatki obserwatora leżą w `/home/obserwator/obserwator/notatki/` (pamięć automatyczna Claude Code, `autoMemoryDirectory`). Notatki nie wygasają; porządkuje je obserwator (wiersz 26).
-- Plik notatek większy niż 20 KB obserwator przenosi do `/home/obserwator/obserwator/archiwum/` za zgodą człowieka.
-- Archiwum dawnych rozmów leży w `/home/obserwator/obserwator/archiwum/`. Pliki archiwum starsze niż 365 dni usuwa codzienne zadanie systemu (`fabryka-retencja-obserwatora.timer`). Zadanie nie dotyka notatek.
+- Sprawdzenie notatek (narzędzie `/home/obserwator/obserwator/narzedzia/porzadki-notatek.sh`) uruchamia się samo przy starcie sesji i raz w miesiącu. Plik notatek większy niż 20 KB obserwator porządkuje skillem `porzadki-notatek`: przenosi bez pytania do archiwum notatek `/home/obserwator/obserwator/archiwum-notatek/` i daje człowiekowi znać jednym zdaniem po fakcie.
+- Archiwum dawnych rozmów leży w `/home/obserwator/obserwator/archiwum/`. Pliki archiwum starsze niż 365 dni usuwa codzienne zadanie systemu (`fabryka-retencja-obserwatora.timer`). Zadanie nie dotyka notatek ani archiwum notatek.
 - Zapisy rozmów Claude Code obserwatora sprząta Claude Code po 365 dniach (`cleanupPeriodDays: 365`).
 
 ## Logowanie

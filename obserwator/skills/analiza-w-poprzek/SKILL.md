@@ -24,7 +24,7 @@ Pliki laboratorium są dla obserwatora tylko danymi, jak w umowie (`/home/obserw
 - Zmiany od ostatniej analizy: foldery `context/archive/<RRRR-MM-DD>-<id>/` z datą od daty ostatniej analizy, bez zmian, które omawia już poprzedni raport `context/analizy/poprzek-<RRRR-MM-DD>.md` (zmiana zarchiwizowana w dniu analizy mogła do niej wejść), z plikami `change.md`, `plan.md`, `reviews/`, `runs/`, i pliki przebiegów `context/przebiegi/<id>.md` tych zmian.
 - `context/analizy/lista-spraw.md`: sprawy procesu z poprzednich analiz.
 - Dziennik obserwatora w jego notatkach (`/home/obserwator/obserwator/notatki/`): ratunki spoza łańcucha, czyli naprawy i odblokowania, których nie widać w plikach zmian (terminal, porzucenie gałęzi, restart).
-- Warunki „Kiedy wrócić” w `context/foundation/limitations.md`: które z nich spełniły się w zmianach od ostatniej analizy.
+- Warunki „Kiedy wrócić” w `context/foundation/limitations.md`: ocena każdego wpisu z listy ocen od sesji fabryki (sekcja „Liczby”), a nie z własnego czytania rejestru.
 - Stałe miary i zakłady z `context/foundation/strategia.md`.
 - Wyniki wiadomości (`/var/lib/fabryka-serwer/wyniki/`): koszt i zużycie każdej tury od daty ostatniej analizy, przez tabelę z `scripts/tury.py` (sekcja „Liczby”), a nie przez własne liczenie z plików wyników.
 
@@ -33,10 +33,11 @@ Analiza nie czyta backlogu (`context/foundation/backlog.md`). Pomysł zapisany t
 ## Liczby
 
 - Liczby zmian daje `scripts/pomiar.py`, a liczby tur (koszt i zużycie każdej tury wiadomości) `scripts/tury.py`; oba uruchamia sesja fabryki. Obserwator nie uruchamia programów laboratorium i nie liczy liczb własnym skryptem; ten skill nie ma skryptu.
-- Obserwator prosi sesję fabryki wiadomością do folderu `/home/fabryka/fabryka`, wysłaną narzędziem `/home/obserwator/obserwator/narzedzia/wyslij.sh` jak w umowie („Rozmowa z sesją główną”), o trzy rzeczy:
+- Obserwator prosi sesję fabryki wiadomością do folderu `/home/fabryka/fabryka`, wysłaną narzędziem `/home/obserwator/obserwator/narzedzia/wyslij.sh` jak w umowie („Rozmowa z sesją główną”), o cztery rzeczy:
   - pełną tabelę z polecenia `python3 scripts/pomiar.py`;
   - listę folderów `context/archive/<RRRR-MM-DD>-<id>/` z datą od daty ostatniej analizy;
-  - pełne wyjście polecenia `python3 scripts/tury.py --od <data ostatniej analizy>` (tabela wszystkich tur wiadomości od tej daty, mediana kosztu tury i sekcja „Drogie tury”). Kod 1 tego polecenia znaczy, że od tej daty nie ma żadnej tury; to idzie do „Czego nie sprawdziłem”.
+  - pełne wyjście polecenia `python3 scripts/tury.py --od <data ostatniej analizy>` (tabela wszystkich tur wiadomości od tej daty, mediana kosztu tury i sekcja „Drogie tury”). Kod 1 tego polecenia znaczy, że od tej daty nie ma żadnej tury; to idzie do „Czego nie sprawdziłem”;
+  - wyjście polecenia `python3 scripts/pomiar.py --rejestry` i dla każdego wpisu z oceną „warunek spełniony” ocenę sesji w kodzie: „problem już nie istnieje (dowód plik:linia)” albo „warunek spełniony, problem żyje”. Wynik to lista otwartych wpisów rejestru ograniczeń, każdy z jedną z czterech ocen („problem już nie istnieje (dowód plik:linia)”, „warunek spełniony, problem żyje”, „warunek niespełniony”, „nie da się sprawdzić”), oraz liczby wpisów „obowiązuje” i wpisów dziennika decyzji ze zmianą od poprzedniej analizy. Kod tego polecenia inny niż 0 idzie do „Czego nie sprawdziłem”.
 - `pomiar.py` nie filtruje po dacie: z pełnej tabeli obserwator bierze wiersze zmian z tej listy folderów, bez zmian omówionych już w poprzednim raporcie.
 - Liczba, której nie ma w tabeli ani w plikach zmian, idzie do „Czego nie sprawdziłem”, a nie do raportu z oszacowaniem.
 
@@ -82,6 +83,7 @@ Raport to plik `context/analizy/poprzek-<RRRR-MM-DD>.md` (data analizy), najwyż
 <koszt i czas zmian; tury od poprzedniej analizy z tury.py: liczba tur, mediana kosztu tury i każda droga tura (powyżej dwukrotności mediany) z przyczyną>
 ## 5. Zakłady i ich miary
 ## 6. Zabezpieczenia i warunki „Kiedy wrócić”
+<liczby wpisów „obowiązuje” i dziennika decyzji ze zmianą od poprzedniej analizy; liczba wpisów na każdą ocenę; do decyzji tylko wpisy „problem już nie istnieje” (numer, tytuł, dowód) i „warunek spełniony, problem żyje” (numer i tytuł, pogrupowane po ścieżce, która spełniła warunek); pozostałe oceny tylko jako liczby>
 ## 7. Sprawy z listy — stan
 <każda sprawa: numer, status, dowód albo powód>
 
@@ -99,13 +101,14 @@ Do tego dwie rzeczy dla repo:
 
 ## Zapis
 
-1. Obserwator pokazuje człowiekowi wnioski i propozycje. Decyzje o propozycjach podejmuje człowiek; obserwator nie zapisuje decyzji za niego.
+1. Obserwator pokazuje człowiekowi wnioski i propozycje. Decyzje o propozycjach podejmuje człowiek; obserwator nie zapisuje decyzji za niego. Człowiek mówi też, które wpisy do decyzji z sekcji 6 raportu zamknąć. W pytaniu o zamknięcie obserwator podaje numery wpisów w gotowej odpowiedzi (np. „Zamknij D-496, D-499”), żeby słowa człowieka zawsze je miały: skrypt przeniesienia odmawia numeru, którego nie ma w cytacie człowieka.
 2. Po decyzjach obserwator wysyła sesji fabryki jedną wiadomość do folderu `/home/fabryka/fabryka` z:
    - raportem `poprzek-<RRRR-MM-DD>.md` w całości;
    - zmianami statusów spraw `lista-spraw.md` (numer sprawy, nowy status, dowód) i nowymi sprawami;
    - nową linią `spis.md`;
    - pozycjami backlogu albo roadmapy, które człowiek kazał dopisać albo zmienić (tylko te pozycje, nie całe pliki);
+   - numerami wpisów rejestru ograniczeń i dziennika decyzji, które człowiek zamknął, z jego słowami w cudzysłowie;
    - decyzjami człowieka jego słowami w cudzysłowie.
 3. Cała wiadomość mieści się poniżej limitu tekstu skrzynki, 20 000 znaków (umowa, „Rozmowa z sesją główną”). Gdy się nie mieści, obserwator skraca raport, a nie dzieli wiadomość na kilka.
-4. Zapis w repo robi sesja fabryki według sekcji „Zapis analizy w poprzek” w `docs/sesja-glowna.md`; obserwator nie pisze w repo fabryki. Sesji wolno zapisać tylko `context/analizy/`, `context/foundation/backlog.md` i `context/foundation/roadmap.md`; poprawka fabryki z analizy (instrukcje, skille, kod) idzie zwykłą zmianą po decyzji człowieka.
+4. Zapis w repo robi sesja fabryki według sekcji „Zapis analizy w poprzek” w `docs/sesja-glowna.md`; obserwator nie pisze w repo fabryki. Sesji wolno zapisać tylko `context/analizy/`, `context/foundation/backlog.md` i `context/foundation/roadmap.md`, a przy przeniesieniu zamkniętych wpisów poleceniem `python3 scripts/zamknij_wpisy.py` także `context/foundation/limitations.md`, `context/foundation/decisions.md` i `context/foundation/decisions-archive.md`. Zapis analizy może przenieść do `context/foundation/decisions-archive.md` tylko te wpisy `limitations.md` i `decisions.md`, o których zamknięciu zdecydował człowiek w tej analizie, z cytatem jego słów; żadnego innego wpisu rejestrów nie zmienia. Poprawka fabryki z analizy (instrukcje, skille, kod) idzie zwykłą zmianą po decyzji człowieka.
 5. Gdy sesja odmówi zapisu, bo jej warunek nie jest spełniony, obserwator zachowuje wiadomość w swoich notatkach razem z nazwą zmiany albo przebiegu z odpowiedzi sesji. Wysyła ją ponownie, gdy ta zmiana zostanie scalona albo porzucona, i mówi człowiekowi, na co zapis czeka.

@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.12"
+WERSJA="v1.0.13"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -45,8 +45,10 @@ PLIKI=(
   "fabryka-retencja-obserwatora.timer"
   "obserwator/CLAUDE.md"
   "obserwator/narzedzia/wyslij.sh"
+  "obserwator/narzedzia/porzadki-notatek.sh"
   "obserwator/skills/analiza-w-poprzek/SKILL.md"
   "obserwator/skills/przeglad-po-projekcie/SKILL.md"
+  "obserwator/skills/porzadki-notatek/SKILL.md"
 )
 
 LIB=/usr/local/lib/fabryka-serwer
@@ -67,10 +69,12 @@ OBS_DIR=/home/obserwator/obserwator
 LAB_DIR=/home/fabryka/fabryka
 NOTATKI="$OBS_DIR/notatki"
 ARCHIWUM="$OBS_DIR/archiwum"
+# Archiwum notatek (umowa, „Pamięć”): poza retencją, która czyści tylko $ARCHIWUM.
+ARCHIWUM_NOTATEK="$OBS_DIR/archiwum-notatek"
 OBS_SETTINGS="$OBS_HOME/.claude/settings.json"
 OBS_SKILLE="$OBS_HOME/.claude/skills"
 # Osobiste skille Claude Code konta obserwator: wzór każdego to obserwator/skills/<nazwa>/SKILL.md z PLIKI.
-SKILLE_OBSERWATORA=(analiza-w-poprzek przeglad-po-projekcie)
+SKILLE_OBSERWATORA=(analiza-w-poprzek przeglad-po-projekcie porzadki-notatek)
 OBS_STAN="$OBS_HOME/.claude.json"
 OBS_CLAUDE="$OBS_HOME/.local/bin/claude"
 FAB_CLAUDE="$FAB_HOME/.local/bin/claude"
@@ -473,7 +477,7 @@ sudo -u fabryka gh auth setup-git
 # --- 6. folder obserwatora i ustawienia --------------------------------------------------------------------
 
 etap 6 "Folder obserwatora, umowa i ustawienia"
-sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$OBS_HOME/.claude"
+sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$ARCHIWUM_NOTATEK" "$OBS_HOME/.claude"
 # Klucze usług od człowieka (umowa obserwatora, „Panele usług”): folder tylko konta obserwator.
 sudo -u obserwator mkdir -p "$OBS_DIR/klucze"
 sudo -u obserwator chmod 0700 "$OBS_DIR/klucze"
@@ -512,6 +516,26 @@ else
 fi
 sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/wyslij.sh"
 
+# Narzędzie sprawdzenia notatek (umowa, „Pamięć”), uruchamiane hakami z ustawień obserwatora niżej: wzór zastępuje
+# inną treść, poprzednia wersja zostaje jako kopia zapasowa; bit wykonywania ustawia konto obserwator.
+if sudo -u obserwator test -f "$OBS_DIR/narzedzia/porzadki-notatek.sh"; then
+  if sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
+    < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh"; then
+    gotowe "narzędzie sprawdzenia notatek obserwatora równe wzorowi"
+  else
+    KOPIA="$OBS_DIR/narzedzia/porzadki-notatek.sh.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
+    sudo -u obserwator cp "$OBS_DIR/narzedzia/porzadki-notatek.sh" "$KOPIA"
+    sudo -u obserwator tee "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
+      < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" > /dev/null
+    gotowe "narzędzie sprawdzenia notatek obserwatora zastąpione wzorem; poprzednia wersja w $KOPIA"
+  fi
+else
+  sudo -u obserwator tee "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
+    < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" > /dev/null
+  gotowe "narzędzie sprawdzenia notatek obserwatora zapisane"
+fi
+sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/porzadki-notatek.sh"
+
 # Skille obserwatora (osobiste skille Claude Code konta obserwator, SKILLE_OBSERWATORA): wzór zastępuje inną treść,
 # poprzednia wersja zostaje jako kopia zapasowa. Nowy albo zmieniony skill restartuje sesję obserwatora w etapie 7,
 # bo działająca sesja Claude Code nie widzi folderu skilli, którego nie było przy jej starcie.
@@ -540,17 +564,24 @@ done
 # Folder serwera, laboratorium i projektów do odczytu, zapis narzędziami plikowymi tylko w skrzynce, a w laboratorium
 # i projektach reguła deny dla Edit; inne wpisy permissions zostają, nowe dochodzą bez duplikatów, a znika każdy wpis
 # z folderem $SERWER/zaufane z v1.0.4, każdy inny folder konta fabryka w additionalDirectories i każda reguła allow
-# z folderem konta fabryka.
+# z folderem konta fabryka. Zapis narzędziami plikowymi także w archiwum notatek, bez pytania (umowa, „Pamięć”).
+# Dwa haki uruchamiają sprawdzenie notatek bez duplikatu: SessionStart przy każdym starcie sesji (także wznowieniu
+# i po kompaktowaniu) i UserPromptSubmit z --co-miesiac raz na miesiąc kalendarzowy; inne haki zostają.
 ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$SERWER/zaufane"
-  --arg lab "$LAB_DIR" --arg projekty "$FAB_HOME/projekty" --arg dom "$FAB_HOME")
+  --arg lab "$LAB_DIR" --arg projekty "$FAB_HOME/projekty" --arg dom "$FAB_HOME"
+  --arg porzadki "$OBS_DIR/narzedzia/porzadki-notatek.sh"
+  --arg porzadki_miesiac "$OBS_DIR/narzedzia/porzadki-notatek.sh --co-miesiac"
+  --arg archiwum_notatek "$ARCHIWUM_NOTATEK")
 WARUNEK_USTAWIEN='.cleanupPeriodDays == 365 and .autoMemoryDirectory == $notatki
   and .inputNeededNotifEnabled == true and .agentPushNotifEnabled == true and .remoteControlAtStartup == true
   and ([$serwer, $lab, $projekty] - (.permissions.additionalDirectories // []) | length == 0)
   and ([.permissions.additionalDirectories[]? | select(type == "string" and (. == $dom or startswith($dom + "/"))
       and . != $lab and . != $projekty)] | length == 0)
-  and (["Edit(/\($skrzynka)/**)"] - (.permissions.allow // []) | length == 0)
+  and (["Edit(/\($skrzynka)/**)", "Edit(/\($archiwum_notatek)/**)"] - (.permissions.allow // []) | length == 0)
   and ([.permissions.allow[]? | select(contains($zaufane) or contains($dom))] | length == 0)
-  and (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - (.permissions.deny // []) | length == 0)'
+  and (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - (.permissions.deny // []) | length == 0)
+  and any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $porzadki)
+  and any(.hooks.UserPromptSubmit[]?.hooks[]?; .type == "command" and .command == $porzadki_miesiac)'
 FILTR_USTAWIEN='. + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
   inputNeededNotifEnabled: true, agentPushNotifEnabled: true, remoteControlAtStartup: true}
   | .permissions = (.permissions // {})
@@ -558,8 +589,15 @@ FILTR_USTAWIEN='. + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
       | map(select((type == "string" and (. == $dom or startswith($dom + "/")) and . != $lab and . != $projekty) | not))
         as $a | $a + ([$serwer, $lab, $projekty] - $a))
   | .permissions.allow = ((.permissions.allow // []) | map(select((contains($zaufane) or contains($dom)) | not)) as $a
-      | $a + (["Edit(/\($skrzynka)/**)"] - $a))
-  | .permissions.deny = ((.permissions.deny // []) as $a | $a + (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - $a))'
+      | $a + (["Edit(/\($skrzynka)/**)", "Edit(/\($archiwum_notatek)/**)"] - $a))
+  | .permissions.deny = ((.permissions.deny // []) as $a | $a + (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - $a))
+  | .hooks = (.hooks // {})
+  | .hooks.SessionStart = ((.hooks.SessionStart // []) as $s
+      | if any($s[]?.hooks[]?; .type == "command" and .command == $porzadki) then $s
+        else $s + [{hooks: [{type: "command", command: $porzadki}]}] end)
+  | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) as $s
+      | if any($s[]?.hooks[]?; .type == "command" and .command == $porzadki_miesiac) then $s
+        else $s + [{hooks: [{type: "command", command: $porzadki_miesiac}]}] end)'
 if ! sudo -u obserwator test -s "$OBS_SETTINGS"; then
   printf '{}\n' | sudo -u obserwator tee "$OBS_SETTINGS" > /dev/null
 fi
@@ -637,7 +675,7 @@ fi
 
 # --- 8. retencja archiwum ----------------------------------------------------------------------------------
 
-etap 8 "Codzienna retencja archiwum obserwatora"
+etap 8 "Codzienna retencja archiwum obserwatora (bez notatek i archiwum notatek)"
 ZMIANA_RETENCJI=0
 if zainstaluj_plik "$POBRANE/fabryka-retencja-obserwatora.service" \
   "$JEDNOSTKI/fabryka-retencja-obserwatora.service" 0644; then
@@ -652,7 +690,7 @@ if [ "$ZMIANA_RETENCJI" -eq 1 ]; then
 fi
 systemctl enable --now fabryka-retencja-obserwatora.timer > /dev/null 2>&1 \
   || przerwij "Nie mogę włączyć zadania fabryka-retencja-obserwatora.timer."
-gotowe "zadanie retencji włączone (pliki archiwum starsze niż 365 dni; notatki zostają)"
+gotowe "zadanie retencji włączone (pliki archiwum starsze niż 365 dni; notatki i archiwum notatek zostają)"
 
 # --- 9. klon laboratorium ----------------------------------------------------------------------------------
 
@@ -851,6 +889,12 @@ wyslij_rowny_wzorowi() {
     && sudo -u obserwator test -x "$OBS_DIR/narzedzia/wyslij.sh"
 }
 
+porzadki_notatek_rowne_wzorowi() {
+  sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
+    < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" \
+    && sudo -u obserwator test -x "$OBS_DIR/narzedzia/porzadki-notatek.sh"
+}
+
 # skill_obserwatora_rowny_wzorowi <nazwa>: skill obserwatora z SKILLE_OBSERWATORA ma treść pobranego wzoru.
 skill_obserwatora_rowny_wzorowi() {
   sudo -u obserwator cmp -s - "$OBS_SKILLE/$1/SKILL.md" \
@@ -988,6 +1032,10 @@ sprawdz "hak startu sesji w ustawieniach Claude Code konta fabryka" "plik $FAB_S
 sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
 sprawdz "narzędzie wysyłania obserwatora równe wzorowi i wykonywalne" "plik $OBS_DIR/narzedzia/wyslij.sh" \
   wyslij_rowny_wzorowi
+sprawdz "narzędzie sprawdzenia notatek obserwatora równe wzorowi i wykonywalne" \
+  "plik $OBS_DIR/narzedzia/porzadki-notatek.sh" porzadki_notatek_rowne_wzorowi
+sprawdz "folder archiwum notatek jest" "sudo -u obserwator ls -ld $ARCHIWUM_NOTATEK" \
+  sudo -u obserwator test -d "$ARCHIWUM_NOTATEK"
 for skill in "${SKILLE_OBSERWATORA[@]}"; do
   sprawdz "skill obserwatora $skill równy wzorowi" "plik $OBS_SKILLE/$skill/SKILL.md" \
     skill_obserwatora_rowny_wzorowi "$skill"
