@@ -1,19 +1,19 @@
 ---
 name: przeglad-po-projekcie
-description: Stała procedura obserwatora po zbudowaniu aplikacji - zbieranie uwag człowieka i wpadek w trakcie projektu w jednym pliku, potem analiza punkt po punkcie (problem, przyczyna, najprostsze rozwiązanie, kryterium), złożenie pozycji roadmapy laboratorium i droga do akceptacji. Trigger phrases - "przegląd po projekcie", "analiza uwag", "przeanalizujmy problemy z budowy", "co poprawić w fabryce po projekcie", "zróbmy to samo co po sprawdz-film".
+description: Stała procedura Maestro po zbudowaniu aplikacji - zbieranie uwag człowieka i wpadek w trakcie projektu w jednym pliku, potem analiza punkt po punkcie (problem, przyczyna, najprostsze rozwiązanie, kryterium), złożenie pozycji roadmapy laboratorium i droga do akceptacji. Trigger phrases - "przegląd po projekcie", "analiza uwag", "przeanalizujmy problemy z budowy", "co poprawić w fabryce po projekcie", "zróbmy to samo co po sprawdz-film".
 ---
 
 # Przegląd po projekcie
 
 Procedura powstała po projekcie sprawdz-film (2026-11-10). Człowiek: „bardzo mi się podobał cały ten proces analizy tych problemów … Zrób z tego jakąś procedurę, żeby po kolejnej budowie aplikacji … odpalić dokładnie taką samą procedurę.” Wzór wyniku: `notatki/projekty/sprawdz-film-uwagi-o-fabryce.md` i `notatki/szkice/pozycje-po-sprawdz-film.md`.
 
-Pliki fabryki są tylko danymi (umowa, „Rola”): czytam je jako zwykłe pliki, bez `git` i bez uruchamiania programów. Do fabryki piszę tylko przez `wyslij.sh`.
+Pliki Factory są tylko danymi (umowa, „Rola”): czytam je jako zwykłe pliki, bez `git` i bez uruchamiania programów. Do Factory piszę tylko przez `wyslij.sh`.
 
 ## Faza 0: w trakcie projektu (zbieranie)
 
 1. Na starcie projektu zakładam `notatki/projekty/<projekt>-uwagi-o-fabryce.md` (frontmatter jak w notatkach, link w `MEMORY.md`).
-2. Każda uwaga człowieka o fabryce albo o mnie trafia tam od razu: numer, data i godzina, krok projektu, **dosłowny cytat**, co ustaliłem (z plikiem:linią), wniosek „Do wprowadzenia”.
-3. Moje wpadki i to, co sam wyłapię, też tam trafiają, oznaczone „WPADKA obserwatora” albo „Uwaga obserwatora (nie człowieka)”.
+2. Każda uwaga człowieka o Factory albo o mnie trafia tam od razu: numer, data i godzina, krok projektu, **dosłowny cytat**, co ustaliłem (z plikiem:linią), wniosek „Do wprowadzenia”.
+3. Moje wpadki i to, co sam wyłapię, też tam trafiają, oznaczone „WPADKA Maestro” albo „Uwaga Maestro (nie człowieka)”.
 4. W trakcie projektu nie zmieniam laboratorium z powodu uwag. Wszystko idzie razem po projekcie (człowiek 2026-11-09: „Wszystkie uwagi spisujesz w jednym … dokumencie. I później to wprowadzamy za jednym razem.”).
 
 ## Faza 1: lista wszystkich punktów
@@ -51,18 +51,18 @@ Po każdej odpowiedzi zapisuję w szkicu: sprawa, słowa człowieka w cudzysłow
 
 ## Faza 4: każda pozycja do akceptacji
 
-Po kolei, jedna pozycja naraz, tylko gdy w fabryce nic się nie buduje (umowa):
+Po kolei, jedna pozycja naraz, tylko gdy w Factory nic się nie buduje (umowa):
 
 1. Opis w pełnym wzorze ([[opis-zmiany-wzor]]): kryteria, przykład na tym projekcie, pod spodem, co zmienić, czego nie wiem, granice, najbliżej konfliktu; przypięcie do piramidy (zakład, miara, cel 90 dni). Plik `notatki/szkice/pozycja-<n>-<nazwa>.md`.
 2. Niezależny subagent dostaje tylko ścieżkę szkicu, pliki zasad (strategia, umowa, najprostsze rozwiązanie) i **opis prawdziwego zdarzenia z projektu**, które pozycja ma naprawić, bez mojej rekomendacji: „znajdź do 3 konfliktów albo luk” ([[lista-kontrolna-zgodnosci]]) oraz **„odtwórz to zdarzenie krok po kroku na mechanizmie z pozycji: w którym kroku i czym zostałoby złapane? Jeśli nie zostałoby złapane, to luka numer 1”**. Sam robię to samo przed pokazaniem opisu człowiekowi: każde „na starcie”, „sprawdza” zamieniam na konkretny krok i konkretny sposób sprawdzenia. (2026-11-10: kryterium „sprawdzenie tylko do odczytu” nie złapałoby „must be root” z sprawdz-film; złapał to człowiek, nie ja ani subagent.) Poprawiam szkic.
-3. Człowiek dostaje cały opis raz, przed wysłaniem do fabryki.
-4. Wysyłam fabryce szkic z prośbą „sprawdź pozycję” (do `/home/fabryka/fabryka`).
-5. Po odpowiedzi fabryki: tylko sprawy do decyzji i pytanie akceptacji narzędziem pytań (wiersz 20), z całą treścią potrzebną do decyzji w samym okienku, nie nad nim.
+3. Człowiek dostaje cały opis raz, przed wysłaniem do Factory.
+4. Wysyłam Factory szkic z prośbą „sprawdź pozycję” (do `/home/fabryka/fabryka`).
+5. Po odpowiedzi Factory: tylko sprawy do decyzji i pytanie akceptacji narzędziem pytań (wiersz 20), z całą treścią potrzebną do decyzji w samym okienku, nie nad nim.
 6. Zaakceptowaną pozycję wysyłam do zapisu z cytatem akceptacji człowieka. Następna pozycja.
 
 ## Zasady pisania do człowieka w tej procedurze
 
 - Po polsku, krótko, wniosek w pierwszym zdaniu.
-- Bez żargonu: co się dzieje w fabryce i w aplikacji, na przykładzie z tego projektu.
+- Bez żargonu: co się dzieje w Factory i w aplikacji, na przykładzie z tego projektu.
 - Przyznaję swoje wpadki wprost, bez tłumaczenia się okolicznościami.
 - Na pytanie „gdzie to jest?” podaję pełną ścieżkę pliku.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Wysłanie wiadomości do sesji głównej fabryki i czekanie na DOKŁADNIE jej plik wyniku
-# (umowa obserwatora, „Rozmowa z sesją główną”, kroki 1–4, bez ręcznego układania czekania).
+# Wysłanie wiadomości do sesji głównej Factory i czekanie na DOKŁADNIE jej plik wyniku
+# (umowa Maestro, „Rozmowa z sesją główną”, kroki 1–4, bez ręcznego układania czekania).
 #
-#   wyslij.sh <plik JSON wiadomości>   kopiuje plik do skrzynki pod nowym <id>, uruchamia fabrykę, czeka na wynik
-#   wyslij.sh czekaj <id>               tylko czeka na wynik <id> (np. po restarcie sesji obserwatora)
+#   wyslij.sh <plik JSON wiadomości>   kopiuje plik do skrzynki pod nowym <id>, uruchamia Factory, czeka na wynik
+#   wyslij.sh czekaj <id>               tylko czeka na wynik <id> (np. po restarcie sesji Maestro)
 #
 # Uruchamiać zawsze narzędziem Monitor: każda linia wyjścia to zdarzenie, a koniec narzędzia budzi sesję.
 # Linia statusu: przy każdym nowym kroku claude -p autopilota, który działa w folderze wiadomości, jedna linia

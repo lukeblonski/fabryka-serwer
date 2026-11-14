@@ -1,11 +1,11 @@
 ---
 name: porzadki-notatek
-description: Stała procedura obserwatora, gdy plik jego notatek ma ponad 20 KB - co przenieść do archiwum notatek, co zostawić, dokąd i jak wyjąć z powrotem, bez pytania człowieka i z jednym zdaniem po fakcie. Uruchamia ją wyjście narzędzia porzadki-notatek.sh przy starcie sesji i raz w miesiącu albo duży plik zauważony przez obserwatora. Trigger phrases - "porządki notatek", "notatki ponad 20 KB", "Pliki notatek wyżej mają ponad 20 KB", "uporządkuj notatki", "za duży plik notatek".
+description: Stała procedura Maestro, gdy plik jego notatek ma ponad 20 KB - co przenieść do archiwum notatek, co zostawić, dokąd i jak wyjąć z powrotem, bez pytania człowieka i z jednym zdaniem po fakcie. Uruchamia ją wyjście narzędzia porzadki-notatek.sh przy starcie sesji i raz w miesiącu albo duży plik zauważony przez Maestro. Trigger phrases - "porządki notatek", "notatki ponad 20 KB", "Pliki notatek wyżej mają ponad 20 KB", "uporządkuj notatki", "za duży plik notatek".
 ---
 
 # Porządki notatek
 
-Notatki obserwatora (`/home/obserwator/obserwator/notatki/`) obserwator czyta na starcie każdej rozmowy, więc plik większy niż 20 KB porządkuje od razu (umowa, „Pamięć”). Sprawdzenie robi narzędzie `/home/obserwator/obserwator/narzedzia/porzadki-notatek.sh`: hak startu sesji uruchamia je przy starcie, wznowieniu i kompaktowaniu sesji, a hak wiadomości raz w miesiącu kalendarzowym. Narzędzie wypisuje każdy plik ponad 20 KB ze ścieżką i rozmiarem; bez takiego pliku nic nie wypisuje.
+Notatki Maestro (`/home/obserwator/obserwator/notatki/`) Maestro czyta na starcie każdej rozmowy, więc plik większy niż 20 KB porządkuje od razu (umowa, „Pamięć”). Sprawdzenie robi narzędzie `/home/obserwator/obserwator/narzedzia/porzadki-notatek.sh`: hak startu sesji uruchamia je przy starcie, wznowieniu i kompaktowaniu sesji, a hak wiadomości raz w miesiącu kalendarzowym. Narzędzie wypisuje każdy plik ponad 20 KB ze ścieżką i rozmiarem; bez takiego pliku nic nie wypisuje.
 
 Przeniesienie idzie bez pytania człowieka. Notatek nie kasuję: każdy fragment trafia do archiwum notatek i da się go wyjąć z powrotem.
 
@@ -19,8 +19,8 @@ Przeniesienie idzie bez pytania człowieka. Notatek nie kasuję: każdy fragment
 
 ## Co przenieść
 
-- Z dziennika (`notatki/dziennik/<RRRR-MM>.md`): zamknięte tematy, czyli sprawy, które się skończyły i nic w nich nie czeka na człowieka, fabrykę ani na mnie. Plik dawnego miesiąca, w którym wszystkie tematy są zamknięte, przenoszę w całości.
-- Z pamięci (np. `notatki/obserwator-pamiec.md`): to, co już stoi w umowie (`/home/obserwator/obserwator/CLAUDE.md`) albo w mechanizmach fabryki i serwera (skill, narzędzie, hak, test). Takiej notatki nie potrzebuję, bo umowę i mechanizm mam bez niej.
+- Z dziennika (`notatki/dziennik/<RRRR-MM>.md`): zamknięte tematy, czyli sprawy, które się skończyły i nic w nich nie czeka na człowieka, Factory ani na mnie. Plik dawnego miesiąca, w którym wszystkie tematy są zamknięte, przenoszę w całości.
+- Z pamięci (np. `notatki/obserwator-pamiec.md`): to, co już stoi w umowie (`/home/obserwator/obserwator/CLAUDE.md`) albo w mechanizmach Factory i serwera (skill, narzędzie, hak, test). Takiej notatki nie potrzebuję, bo umowę i mechanizm mam bez niej.
 
 ## Co zostawić
 

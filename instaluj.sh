@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.13"
+WERSJA="v1.0.15"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -79,6 +79,8 @@ OBS_STAN="$OBS_HOME/.claude.json"
 OBS_CLAUDE="$OBS_HOME/.local/bin/claude"
 FAB_CLAUDE="$FAB_HOME/.local/bin/claude"
 FAB_SKILLE="$FAB_HOME/.claude/skills"
+# Zapis nazw skilli, które instalator skopiował do FAB_SKILLE (jedna w linii); stan fabryki konta fabryka.
+FAB_SKILLE_ZAPIS="$FAB_HOME/.local/state/fabryka/skille-instalatora"
 FAB_SETTINGS="$FAB_HOME/.claude/settings.json"
 HAK_FABRYKI="python3 -I -B $LAB_DIR/scripts/hook_start_sesji.py"
 
@@ -696,8 +698,10 @@ gotowe "zadanie retencji włączone (pliki archiwum starsze niż 365 dni; notatk
 
 etap 9 "Laboratorium fabryki na koncie fabryka"
 if sudo -u fabryka test -d "$LAB_DIR/.git"; then
+  KLON_BYL=1
   gotowe "klon laboratorium już jest (bez pobierania zmian)"
 else
+  KLON_BYL=0
   if [ -z "${FABRYKA_REPO:-}" ]; then
     LOGIN_GITHUB=$(sudo -u fabryka gh api user --jq .login)
     FABRYKA_REPO="$LOGIN_GITHUB/fabryka"
@@ -718,17 +722,57 @@ skille_laboratorium() {
   sudo -u fabryka -H find "$LAB_DIR/skills" -mindepth 1 -maxdepth 1 -type d -printf '%f\n'
 }
 
-# skille_fabryki: folder każdego skilla laboratorium w ~/.claude/skills konta fabryka zastępuje kopia z klonu;
-# inne foldery zostają. Kopiuje i usuwa konto fabryka.
+# skille_zainstalowane: nazwy skilli, które instalator skopiował wcześniej, po jednej w linii: linie zapisu
+# $FAB_SKILLE_ZAPIS; bez zapisu, gdy klon był przed tym uruchomieniem (KLON_BYL=1), nazwy folderów skills/<nazwa>/
+# z historii klonu (instalacje sprzed zapisu); na świeżym klonie nic. Czyta konto fabryka; błąd gita daje kod 1.
+skille_zainstalowane() {
+  local historia
+  if sudo -u fabryka -H test -f "$FAB_SKILLE_ZAPIS"; then
+    sudo -u fabryka -H cat -- "$FAB_SKILLE_ZAPIS"
+  elif [ "${KLON_BYL:-0}" = 1 ]; then
+    historia=$(sudo -u fabryka -H git -C "$LAB_DIR" log --format= --name-only -- skills/) || return 1
+    printf '%s\n' "$historia" | awk -F/ 'NF > 2 && $1 == "skills" { print $2 }' | sort -u
+  fi
+}
+
+# skille_fabryki: folder każdego skilla laboratorium w ~/.claude/skills konta fabryka zastępuje kopia z klonu.
+# Potem usuwa folder albo dowiązanie każdego skilla ze skille_zainstalowane, którego klon już nie ma, i wypisuje
+# każdy usunięty; nazwa spoza wzoru ^[A-Za-z0-9][A-Za-z0-9._-]*$ (np. z „..” albo „/”) nie jest usuwana. Na końcu
+# zapis $FAB_SKILLE_ZAPIS dostaje nazwy skilli klonu (plik tymczasowy i mv). Usuwanie i zapis tylko wtedy, gdy klon
+# stoi na gałęzi master: gałąź zmiany zatrzymanej przed scaleniem nie usuwa skilla, który master dalej uruchamia.
+# Inne foldery zostają. Kopiuje, usuwa i zapisuje konto fabryka.
 skille_fabryki() {
-  local lista nazwa
+  local lista wczesniej nazwa nowy_zapis galaz
   lista=$(skille_laboratorium) || przerwij "Nie mogę odczytać skilli laboratorium w $LAB_DIR/skills."
   [ -n "$lista" ] || przerwij "Laboratorium nie ma skilli w $LAB_DIR/skills."
+  wczesniej=$(skille_zainstalowane) \
+    || przerwij "Nie mogę odczytać skilli, które instalator skopiował wcześniej ($FAB_SKILLE_ZAPIS albo historia skills/ w $LAB_DIR)."
   sudo -u fabryka -H mkdir -p "$FAB_SKILLE"
   while IFS= read -r nazwa; do
     sudo -u fabryka -H rm -rf -- "$FAB_SKILLE/$nazwa"
     sudo -u fabryka -H cp -R -- "$LAB_DIR/skills/$nazwa" "$FAB_SKILLE/$nazwa"
   done <<< "$lista"
+  galaz=$(sudo -u fabryka -H git -C "$LAB_DIR" symbolic-ref --short -q HEAD) || galaz=""
+  if [ "$galaz" != master ]; then
+    gotowe "skille spoza klonu nie są usuwane: klon laboratorium nie jest na gałęzi master (${galaz:-odłączony HEAD})"
+    gotowe "skille laboratorium skopiowane do $FAB_SKILLE"
+    return 0
+  fi
+  while IFS= read -r nazwa; do
+    [[ "$nazwa" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+    if grep -qxF -- "$nazwa" <<< "$lista"; then
+      continue
+    fi
+    if sudo -u fabryka -H test -e "$FAB_SKILLE/$nazwa" || sudo -u fabryka -H test -L "$FAB_SKILLE/$nazwa"; then
+      sudo -u fabryka -H rm -rf -- "$FAB_SKILLE/$nazwa"
+      gotowe "usunięty skill $nazwa: fabryka go zainstalowała, a laboratorium go już nie ma"
+    fi
+  done <<< "$wczesniej"
+  sudo -u fabryka -H mkdir -p -- "${FAB_SKILLE_ZAPIS%/*}"
+  nowy_zapis=$(sudo -u fabryka -H mktemp -- "$FAB_SKILLE_ZAPIS.XXXXXX") \
+    || przerwij "Nie mogę zapisać listy skilli w ${FAB_SKILLE_ZAPIS%/*}."
+  printf '%s\n' "$lista" | sudo -u fabryka -H tee -- "$nowy_zapis" > /dev/null
+  sudo -u fabryka -H mv -f -- "$nowy_zapis" "$FAB_SKILLE_ZAPIS"
   gotowe "skille laboratorium skopiowane do $FAB_SKILLE"
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sprawdzenie notatek obserwatora (umowa, „Pamięć”): wypisuje każdy plik notatek, także w podfolderze, większy niż
-# 20 KB (więcej niż 20 480 bajtów), żeby sesja obserwatora uporządkowała go skillem porzadki-notatek.
+# Sprawdzenie notatek Maestro (umowa, „Pamięć”): wypisuje każdy plik notatek, także w podfolderze, większy niż
+# 20 KB (więcej niż 20 480 bajtów), żeby sesja Maestro uporządkowała go skillem porzadki-notatek.
 #
 #   porzadki-notatek.sh                sprawdza zawsze (hak SessionStart: start, wznowienie, kompaktowanie sesji)
 #   porzadki-notatek.sh --co-miesiac   sprawdza raz na miesiąc kalendarzowy według znacznika (hak UserPromptSubmit)
@@ -51,7 +51,7 @@ while IFS= read -r -d '' wpis; do
   ZGLOSZONE=1
 done < "$PLIK_LISTY"
 if [ "$ZGLOSZONE" -eq 1 ]; then
-  echo "Pliki notatek wyżej mają ponad 20 KB: obserwator porządkuje je skillem porzadki-notatek bez pytania" \
+  echo "Pliki notatek wyżej mają ponad 20 KB: Maestro porządkuje je skillem porzadki-notatek bez pytania" \
     "i daje człowiekowi jedno zdanie po fakcie."
 fi
 
