@@ -12,7 +12,7 @@ set -euo pipefail
 # Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
 
 REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.16"
+WERSJA="v1.0.17"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -1018,6 +1018,47 @@ print(p)'
   return "$wynik"
 }
 
+# ocena_w_skrzynce <folder> <konto>: dodatni sygnał trzech warunków. Konto obserwator zapisuje w folderze plik próbny
+# pod losową nazwą jednym otwarciem, które nie idzie za dowiązaniem, tak jak plik oceny Maestro
+# (ocena-<change-id>.md, zapisany narzędziem Write); konto fabryka otwiera go bez podążania za dowiązaniem i widzi
+# zwykły plik z treścią próby, którego właścicielem jest <konto> (tak sprawdza ocenę ocena_problem w
+# scripts/przebieg_rozmowy.py laboratorium); obserwator go potem usuwa. Kod 0 tylko, gdy zachodzą wszystkie trzy;
+# plik, który został po próbie, sprząta root.
+ocena_w_skrzynce() {
+  local folder="$1" konto="$2" wynik=0 probny
+  local tworz='import os, secrets, sys
+p = os.path.join(sys.argv[1], ".proba-oceny-" + secrets.token_hex(8))
+fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+os.write(fd, b"commit: proba\n")
+os.close(fd)
+print(p)'
+  local czytaj='import os, pwd, stat, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+info = os.fstat(fd)
+dane = os.read(fd, 64)
+os.close(fd)
+wlasciciel = pwd.getpwnam(sys.argv[2]).pw_uid
+sys.exit(0 if stat.S_ISREG(info.st_mode) and info.st_uid == wlasciciel and dane == b"commit: proba\n" else 1)'
+  if ! probny=$(sudo -u obserwator python3 -I -c "$tworz" "$folder" 2> /dev/null); then
+    return 1
+  fi
+  case "$probny" in
+    "$folder"/.proba-oceny-*) ;;
+    *) return 1 ;;
+  esac
+  if ! sudo -u fabryka python3 -I -c "$czytaj" "$probny" "$konto" 2> /dev/null; then
+    wynik=1
+  fi
+  if ! sudo -u obserwator rm -f "$probny" 2> /dev/null; then
+    wynik=1
+  fi
+  if [ -e "$probny" ] || [ -L "$probny" ]; then
+    wynik=1
+    rm -f "$probny"
+  fi
+  return "$wynik"
+}
+
 gitleaks_w_wersji_szablonu() {
   local wynik
   wynik=$(sudo -u fabryka gitleaks version 2>&1) || return 1
@@ -1094,6 +1135,9 @@ sprawdz "proces remote-control obserwatora działa i nie czeka na pytanie (y/n)"
 sprawdz "umask 022 kont fabryka i obserwator" "pole GECOS: getent passwd fabryka obserwator" umask_kont
 sprawdz "skrzynkę pisze i czyści tylko obserwator, fabryka nie zapisuje ani nie usuwa" \
   "właściciel obserwator:fabryka i tryb 2750 folderu $SKRZYNKA (ls -ld $SKRZYNKA)" tylko_obserwator_pisze "$SKRZYNKA"
+sprawdz "ocenę Maestro w skrzynce czyta konto fabryka, a jej właścicielem jest obserwator" \
+  "właściciel obserwator:fabryka i tryb 2750 folderu $SKRZYNKA (ls -ld $SKRZYNKA) i umask 022 obserwatora" \
+  ocena_w_skrzynce "$SKRZYNKA" obserwator
 sprawdz "klucze obserwatora 0700, fabryka ich nie czyta" \
   "tryb 0700 folderu $OBS_DIR/klucze (sudo -u obserwator ls -ld $OBS_DIR/klucze)" klucze_obserwatora
 sprawdz "przekazanie: obserwator kładzie, fabryka czyta i usuwa" \
