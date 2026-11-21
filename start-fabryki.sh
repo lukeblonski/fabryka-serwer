@@ -4,7 +4,8 @@ set -euo pipefail
 # Skrypt startowy fabryki: cel jedynej reguły sudo obserwatora
 # (sudo -n -u fabryka /usr/local/lib/fabryka-serwer/start-fabryki.sh [<id polecenia>]).
 #
-# Bez argumentu: zakłada sesję tmux "fabryka" z powłoką w folderze laboratorium, gdy jej nie ma.
+# Bez argumentu: zakłada sesję tmux "fabryka" z powłoką w folderze laboratorium (poza trybem użytkownika z pliku
+# roota /var/lib/fabryka-serwer/tryb i gdy laboratorium jest), inaczej w folderze domowym, gdy sesji nie ma.
 # Kod 0: sesja "fabryka" istnieje po przebiegu. Kod 1: inne konto niż fabryka albo sesja nie powstała.
 #
 # Z jednym argumentem <id wiadomości> (wzorzec RRRRMMDD-GGMMSS-xxxx): przekazuje sesji głównej fabryki
@@ -19,6 +20,18 @@ set -euo pipefail
 poprawny_id() {
   local LC_ALL=C
   [[ "$1" =~ ^[0-9]{8}-[0-9]{6}-[a-z0-9]{4}$ ]]
+}
+
+# folder_sesji <plik trybu> <laboratorium> <dom>: folder sesji tmux. Laboratorium, gdy treść pliku trybu roota to nie
+# uzytkownik (autor, brak pliku albo błąd odczytu) i folder laboratorium jest; inaczej folder domowy konta.
+folder_sesji() {
+  local tryb
+  tryb=$(cat -- "$1" 2> /dev/null) || tryb=""
+  if [ "$tryb" != uzytkownik ] && [ -d "$2" ]; then
+    printf '%s\n' "$2"
+  else
+    printf '%s\n' "$3"
+  fi
 }
 
 if [ "$(id -un)" != "fabryka" ]; then
@@ -58,12 +71,7 @@ if [ "$#" -eq 1 ]; then
   exit 1
 fi
 
-LAB=/home/fabryka/fabryka
-if [ -d "$LAB" ]; then
-  FOLDER="$LAB"
-else
-  FOLDER="$HOME"
-fi
+FOLDER=$(folder_sesji /var/lib/fabryka-serwer/tryb /home/fabryka/fabryka "$HOME")
 cd "$FOLDER"
 
 if ! tmux has-session -t fabryka 2>/dev/null; then

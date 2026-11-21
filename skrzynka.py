@@ -8,7 +8,7 @@ start-fabryki.sh jako konto fabryka:
     python3 skrzynka.py wykonaj <id wiadomości>   tura sesji; zawsze kończy się plikiem WYNIKI/<id>.json
 
 Wiadomość to jeden plik JSON SKRZYNKA/<id>.json, który pisze tylko konto obserwator, z polami folder (LAB albo
-PROJEKTY/<projekt> z nazwą według wzorca ZMIANA), tekst (zwykły tekst do sesji) i opcjonalnym rozmowa (UUID
+PROJEKTY/<projekt> z nazwą według wzorca ZMIANA; LAB tylko poza trybem użytkownika), tekst (zwykły tekst do sesji) i opcjonalnym rozmowa (UUID
 rozmowy do wznowienia). Wykonawca bierze blokadę folderu i uruchamia w nim jedną turę claude -p: tekst idzie na
 wejście standardowe, nigdy przez powłokę ani argument. Wiadomość bez pola rozmowa zaczyna nową rozmowę.
 
@@ -31,6 +31,11 @@ bez folderu znaczy usunięty folder. Przy każdym wykonaj, po blokadzie folderu,
 (WYNIKI/archiwum, 0750) każdy znacznik bez wyniku, którego folder wiadomości nie istnieje albo jest folderem
 bieżącej wiadomości (nowa wiadomość zastępuje przerwaną pracę), a praca nie żyje (nie ma procesu z pid albo jego
 argumenty nie kończą się na wykonaj <id>). Nic nie kasuje; identyfikator z ARCHIWUM zostaje zajęty.
+
+Folder Factory daje tryb z pliku roota TRYB (folder_fabryki): uzytkownik to ZESTAW (zestaw Factory w folderze roota,
+tylko do odczytu), a autor, brak pliku albo błąd odczytu to LAB. Reguła autopilota i teksty tury (REGULA_AUTOPILOTA,
+SESJA_SERWERA, WZNOWIENIE) to stałe liczone przy imporcie z folder_fabryki(): wykonawca biegnie jako osobny proces na
+każdą wiadomość. W trybie użytkownika wiadomość do folderu LAB jest odmową.
 
 Foldery i konto są stałymi modułu; testy podmieniają je w procesie. Plik nie czyta zmiennych środowiska
 do wyboru folderów.
@@ -57,6 +62,9 @@ DOM = "/home/fabryka"
 LAB = "/home/fabryka/fabryka"
 PROJEKTY = DOM + "/projekty"
 OBSERWATOR = "obserwator"
+# Tryb instalacji w pliku roota (instalator, --tryb-autora): autor albo uzytkownik; zestaw Factory trybu użytkownika.
+TRYB = "/var/lib/fabryka-serwer/tryb"
+ZESTAW = "/usr/local/lib/fabryka"
 
 ID = re.compile(r"[0-9]{8}-[0-9]{6}-[a-z0-9]{4}")
 ZMIANA = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
@@ -68,18 +76,32 @@ POLA_OPCJONALNE = ("rozmowa",)
 MAKS_PLIK = 64 * 1024
 MAKS_TRESC = 20000
 
-# Wywołanie tury. Reguła zezwala sesji uruchomić pełną ścieżką autopilota laboratorium (Z6).
-REGULA_AUTOPILOTA = "Bash(python3 /home/fabryka/fabryka/scripts/autopilot.py:*)"
+
+
+def folder_fabryki():
+    """Folder Factory według trybu z pliku TRYB: treść uzytkownik daje ZESTAW, a autor, brak pliku, inna treść albo
+    błąd odczytu dają LAB."""
+    try:
+        with open(TRYB, encoding="utf-8") as plik:
+            tryb = plik.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return LAB
+    return ZESTAW if tryb == "uzytkownik" else LAB
+
+
+# Wywołanie tury. Reguła zezwala sesji uruchomić pełną ścieżką autopilota z folderu Factory trybu (Z6).
+FABRYKA = folder_fabryki()
+REGULA_AUTOPILOTA = f"Bash(python3 {FABRYKA}/scripts/autopilot.py:*)"
 SESJA_SERWERA = (
     "Rozmówcą w tej rozmowie jest obserwator, który pisze w imieniu człowieka. Działaj według "
-    "/home/fabryka/fabryka/docs/sesja-glowna.md, sekcja „Na serwerze: rozmowa przez obserwatora”."
+    f"{FABRYKA}/docs/sesja-glowna.md, sekcja „Na serwerze: rozmowa przez obserwatora”."
 )
 # Zmienna tury: autopilot bez --w-tle przy niej kończy się kodem 2 (scripts/autopilot.py, ROZMOWA_ENV).
 ROZMOWA_ENV = "FABRYKA_ROZMOWA"
 WZNOWIENIE = (
     "Wywołanie autopilota w tym folderze się skończyło. Przeczytaj jego stan.json i koniec logu {log} "
     "i postępuj według sekcji „Na serwerze: rozmowa przez obserwatora” w "
-    "/home/fabryka/fabryka/docs/sesja-glowna.md."
+    f"{FABRYKA}/docs/sesja-glowna.md."
 )
 LOG_AUTOPILOTA = "wyjscie.log"
 BLOKADA_AUTOPILOTA = "stan.lock"
@@ -126,6 +148,9 @@ def problemy(dane):
         if not isinstance(folder, str) or (folder != LAB and nazwa_projektu(folder) is None):
             wynik.append(f"folder to nie {LAB} ani {PROJEKTY}/<projekt> z nazwą według wzorca "
                          f"{ZMIANA.pattern}: {folder!r}")
+        elif folder == LAB and folder_fabryki() != LAB:
+            wynik.append(f"folder laboratorium {LAB} tylko w trybie autora; w trybie użytkownika (plik {TRYB}) "
+                         f"wiadomość idzie do {PROJEKTY}/<projekt>")
     if "tekst" in dane:
         tekst = dane["tekst"]
         if not isinstance(tekst, str) or tekst.strip() == "":

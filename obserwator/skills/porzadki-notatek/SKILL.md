@@ -5,7 +5,7 @@ description: Stała procedura Maestro, gdy plik jego notatek ma ponad 20 KB - co
 
 # Porządki notatek
 
-Notatki Maestro (`/home/obserwator/obserwator/notatki/`) Maestro czyta na starcie każdej rozmowy, więc plik większy niż 20 KB porządkuje od razu (umowa, „Pamięć”). Sprawdzenie robi narzędzie `/home/obserwator/obserwator/narzedzia/porzadki-notatek.sh`: hak startu sesji uruchamia je przy starcie, wznowieniu i kompaktowaniu sesji, a hak wiadomości raz w miesiącu kalendarzowym. Narzędzie wypisuje każdy plik ponad 20 KB ze ścieżką i rozmiarem; bez takiego pliku nic nie wypisuje.
+Notatki Maestro (`/home/obserwator/obserwator/notatki/`) Maestro czyta na starcie każdej rozmowy, więc plik większy niż 20 KB porządkuje od razu (umowa, „Pamięć”). Sprawdzenie robi narzędzie `/usr/local/lib/fabryka-serwer/obserwator/narzedzia/porzadki-notatek.sh`: hak startu sesji uruchamia je przy starcie, wznowieniu i kompaktowaniu sesji, a hak wiadomości raz w miesiącu kalendarzowym. Narzędzie wypisuje każdy plik ponad 20 KB ze ścieżką i rozmiarem; bez takiego pliku nic nie wypisuje.
 
 Przeniesienie idzie bez pytania człowieka. Notatek nie kasuję: każdy fragment trafia do archiwum notatek i da się go wyjąć z powrotem.
 
@@ -14,13 +14,13 @@ Przeniesienie idzie bez pytania człowieka. Notatek nie kasuję: każdy fragment
 1. Powtórne zgłoszenie. Czytam `notatki/porzadki-notatek.md` (linia na plik: ścieżka, data, rozmiar w KB). Gdy zgłoszony plik ma tam linię z tego samego miesiąca, a urósł od niej o nie więcej niż 20 KB, nic nie przenoszę i nic nie piszę człowiekowi. Sprawdzenie rusza przy każdym starcie i kompaktowaniu sesji, a człowiek dostaje jedno zdanie na plik i miesiąc.
 2. Czytam zgłoszony plik w całości i dzielę go na to, co przenieść, i to, co zostaje (sekcje niżej).
 3. Przenoszę według sekcji „Dokąd i jak”.
-4. Uruchamiam narzędzie jeszcze raz: `/home/obserwator/obserwator/narzedzia/porzadki-notatek.sh`.
+4. Uruchamiam narzędzie jeszcze raz: `/usr/local/lib/fabryka-serwer/obserwator/narzedzia/porzadki-notatek.sh`.
 5. Daję człowiekowi jedno zdanie po fakcie (sekcja „Zdanie dla człowieka”).
 
 ## Co przenieść
 
 - Z dziennika (`notatki/dziennik/<RRRR-MM>.md`): zamknięte tematy, czyli sprawy, które się skończyły i nic w nich nie czeka na człowieka, Factory ani na mnie. Plik dawnego miesiąca, w którym wszystkie tematy są zamknięte, przenoszę w całości.
-- Z pamięci (np. `notatki/obserwator-pamiec.md`): to, co już stoi w umowie (`/home/obserwator/obserwator/CLAUDE.md`) albo w mechanizmach Factory i serwera (skill, narzędzie, hak, test). Takiej notatki nie potrzebuję, bo umowę i mechanizm mam bez niej.
+- Z pamięci (np. `notatki/obserwator-pamiec.md`): to, co już stoi w umowie (`/usr/local/lib/fabryka-serwer/obserwator/CLAUDE.md`) albo w mechanizmach Factory i serwera (skill, narzędzie, hak, test). Takiej notatki nie potrzebuję, bo umowę i mechanizm mam bez niej.
 
 ## Co zostawić
 

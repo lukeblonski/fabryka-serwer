@@ -8,11 +8,18 @@ set -euo pipefail
 # Zasada bezpieczeństwa: root nie otwiera żadnej ścieżki pod /home/. Pliki kont czyta i zapisuje
 # konto właściciela (sudo -u <konto> tee, cmp -, cp, rm, mkdir, find, diff, git, jq), a treść przychodzi przez
 # standardowe wejście z folderu tymczasowego roota. Root zmienia tylko pliki systemu
-# (/etc, /usr/local/lib/fabryka-serwer, /var/lib/fabryka-serwer, /var/log) i tryby samych katalogów domowych.
-# Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
+# (/etc, /usr/local/lib/fabryka, /usr/local/lib/fabryka-serwer, /var/lib/fabryka-serwer, /var/log) i tryby samych
+# katalogów domowych. Bez "sudo -u <konto> sh -c" i "sudo -u <konto> bash -c".
+#
+# Opcje: --tryb-autora (laboratorium autora Factory zostaje klonem; tryb zapisany w pliku roota) i --zestaw <plik>
+# (archiwum zestawu Factory z tagu laboratorium, scripts/zestaw_fabryki.py, zamiast archiwum z wydania w trybie
+# użytkownika).
 
-REPO="lukeblonski/fabryka-serwer"
-WERSJA="v1.0.17"
+REPO="lukeblonski/maestro-install"
+WERSJA="v1.0.19"
+# Suma SHA-256 pliku zestaw-fabryki.tar.gz wydania WERSJA, zrobionego przez scripts/zestaw_fabryki.py z tagu
+# zestaw-<WERSJA> laboratorium; 64 zera do przypięcia przy wydaniu.
+ZESTAW_SUMA="49bf36e6554c46c90006bf1e10ece875cb7ce6345029eb64a84a8b9075a106bd"
 
 # gitleaks w wersji z szablonu CI guardrails (skills/guardrails/templates/ci.yml, GITLEAKS_VERSION) i suma SHA-256
 # archiwum linux_x64 z oficjalnego pliku sum tego wydania (gitleaks_8.30.1_checksums.txt).
@@ -44,6 +51,7 @@ PLIKI=(
   "fabryka-retencja-obserwatora.service"
   "fabryka-retencja-obserwatora.timer"
   "obserwator/CLAUDE.md"
+  "obserwator/CLAUDE-autor.md"
   "obserwator/narzedzia/wyslij.sh"
   "obserwator/narzedzia/porzadki-notatek.sh"
   "obserwator/skills/analiza-w-poprzek/SKILL.md"
@@ -51,6 +59,8 @@ PLIKI=(
   "obserwator/skills/porzadki-notatek/SKILL.md"
 )
 
+# Pliki serwera w jednym drzewie roota (wzor_serwera, drzewo_roota): skrypty startowe, wykonawca rozmowy, umowa Maestro
+# w $LIB/obserwator/CLAUDE.md i narzędzia Maestro w $LIB/obserwator/narzedzia; konta fabryka i obserwator ich nie zmienią.
 LIB=/usr/local/lib/fabryka-serwer
 # Foldery wiadomości obserwatora: skrzynkę pisze tylko obserwator, wyniki tylko fabryka.
 # W przekazaniu obserwator kładzie plik z wynikiem pracy w panelu usługi, a fabryka go czyta i usuwa.
@@ -73,8 +83,10 @@ ARCHIWUM="$OBS_DIR/archiwum"
 ARCHIWUM_NOTATEK="$OBS_DIR/archiwum-notatek"
 OBS_SETTINGS="$OBS_HOME/.claude/settings.json"
 OBS_SKILLE="$OBS_HOME/.claude/skills"
-# Osobiste skille Claude Code konta obserwator: wzór każdego to obserwator/skills/<nazwa>/SKILL.md z PLIKI.
+# Osobiste skille Claude Code konta obserwator w trybie autora: wzór każdego to obserwator/skills/<nazwa>/SKILL.md
+# z PLIKI. W trybie użytkownika skill porzadki-notatek jest w $ZARZADZANE, a skille autora (SKILLE_AUTORA) nie ma.
 SKILLE_OBSERWATORA=(analiza-w-poprzek przeglad-po-projekcie porzadki-notatek)
+SKILLE_AUTORA=(analiza-w-poprzek przeglad-po-projekcie)
 OBS_STAN="$OBS_HOME/.claude.json"
 OBS_CLAUDE="$OBS_HOME/.local/bin/claude"
 FAB_CLAUDE="$FAB_HOME/.local/bin/claude"
@@ -82,7 +94,17 @@ FAB_SKILLE="$FAB_HOME/.claude/skills"
 # Zapis nazw skilli, które instalator skopiował do FAB_SKILLE (jedna w linii); stan fabryki konta fabryka.
 FAB_SKILLE_ZAPIS="$FAB_HOME/.local/state/fabryka/skille-instalatora"
 FAB_SETTINGS="$FAB_HOME/.claude/settings.json"
-HAK_FABRYKI="python3 -I -B $LAB_DIR/scripts/hook_start_sesji.py"
+
+# Tryb instalacji (autor albo uzytkownik) w pliku roota: zapisuje go tylko opcja --tryb-autora albo pierwsze
+# uruchomienie bez niej (uzytkownik).
+TRYB_PLIK="$SERWER/tryb"
+# Tryb użytkownika: zestaw Factory w folderze roota i skille Factory w folderze zarządzanym Claude Code (czytają go
+# wszystkie konta, zmienia tylko root). Wzór każdego drzewa roota to lista sum w WZORY, a zmienione pliki trafiają do
+# KOPIE (root, 0700).
+ZESTAW=/usr/local/lib/fabryka
+ZARZADZANE=/etc/claude-code/.claude/skills
+WZORY="$SERWER/wzory"
+KOPIE="$SERWER/kopie"
 
 ZNACZNIK_PATH="# fabryka-serwer: ścieżka i umask konta (dopisane przez instalator)"
 ZNACZNIK_DOCKER="# fabryka-serwer: Docker bez roota (dopisane przez instalator)"
@@ -114,6 +136,173 @@ przerwij() {
   exit 1
 }
 
+# --- opcje, tryb i archiwum zestawu (przed każdą zmianą) -----------------------------------------------------
+
+# czytaj_opcje <argumenty instalatora>: OPCJA_AUTORA (1 z --tryb-autora, inaczej 0) i ZESTAW_PLIK (ścieżka z --zestaw,
+# względna liczona od folderu, z którego uruchomiono instalator). Nieznana opcja, --zestaw bez pliku albo archiwum pod
+# /home (także po rozwinięciu dowiązań) przerywa instalator kodem 1.
+czytaj_opcje() {
+  OPCJA_AUTORA=0
+  ZESTAW_PLIK=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --tryb-autora) OPCJA_AUTORA=1 ;;
+      --zestaw)
+        if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+          przerwij "Opcja --zestaw wymaga pliku archiwum zestawu Factory. Niczego nie zmieniono."
+        fi
+        case "$2" in
+          /*) ZESTAW_PLIK="$2" ;;
+          *) ZESTAW_PLIK="$PWD/$2" ;;
+        esac
+        # Root nie otwiera ścieżek pod /home: archiwum spod /home, także po rozwinięciu dowiązań, przerywa instalator.
+        for sciezka in "$ZESTAW_PLIK" "$(realpath -m -- "$ZESTAW_PLIK" 2> /dev/null || true)"; do
+          case "$sciezka" in
+            /home|/home/*)
+              przerwij "Archiwum zestawu $ZESTAW_PLIK leży pod /home, a root nie otwiera ścieżek pod /home. Skopiuj je do /root (np. /root/zestaw-fabryki.tar.gz) i podaj tę ścieżkę. Niczego nie zmieniono."
+              ;;
+          esac
+        done
+        shift
+        ;;
+      *) przerwij "Nieznana opcja: $1. Instalator zna tylko --tryb-autora i --zestaw <plik>. Niczego nie zmieniono." ;;
+    esac
+    shift
+  done
+}
+
+# ustal_tryb: TRYB to autor z opcją --tryb-autora, inaczej treść pliku $TRYB_PLIK (autor albo uzytkownik), a bez pliku
+# uzytkownik. Plik trybu, który jest dowiązaniem, nie jest zwykłym plikiem albo ma inną treść, przerywa instalator.
+ustal_tryb() {
+  if [ "$OPCJA_AUTORA" = 1 ]; then
+    TRYB=autor
+    return 0
+  fi
+  if [ ! -e "$TRYB_PLIK" ] && [ ! -L "$TRYB_PLIK" ]; then
+    TRYB=uzytkownik
+    return 0
+  fi
+  if [ -L "$TRYB_PLIK" ] || [ ! -f "$TRYB_PLIK" ]; then
+    przerwij "Plik trybu $TRYB_PLIK nie jest zwykłym plikiem. Niczego nie zmieniono."
+  fi
+  TRYB=$(cat -- "$TRYB_PLIK")
+  case "$TRYB" in
+    autor | uzytkownik) ;;
+    *) przerwij "Plik trybu $TRYB_PLIK ma treść inną niż autor albo uzytkownik. Niczego nie zmieniono." ;;
+  esac
+}
+
+# zapisz_tryb: TRYB do pliku roota $TRYB_PLIK (root:root 0644).
+zapisz_tryb() {
+  printf '%s\n' "$TRYB" > "$TMP/tryb"
+  zainstaluj_plik "$TMP/tryb" "$TRYB_PLIK" 0644 || true
+}
+
+# sprawdz_archiwum <archiwum> <nowy folder>: rozpakowuje archiwum zestawu Factory do folderu, gdy archiwum jest zwykłym
+# plikiem, jego lista (tar -tvzf, czytana przed rozpakowaniem) ma tylko zwykłe pliki i foldery, bez członu ".." i bez
+# ścieżki od /, a po rozpakowaniu pliki folderu poza SUMY i WERSJA to dokładnie pliki z listy SUMY z tymi samymi
+# sumami i plik WERSJA jest. Inaczej kod 1 z powodem na wyjściu błędów.
+sprawdz_archiwum() {
+  local archiwum="$1" folder="$2" typy nazwy linia pliki
+  if [ -L "$archiwum" ] || [ ! -f "$archiwum" ]; then
+    echo "Archiwum zestawu $archiwum nie jest zwykłym plikiem." >&2
+    return 1
+  fi
+  if ! typy=$(LC_ALL=C tar --quoting-style=escape -tvzf "$archiwum" 2> /dev/null | cut -c 1) \
+    || ! nazwy=$(LC_ALL=C tar --quoting-style=escape -tzf "$archiwum" 2> /dev/null); then
+    echo "Nie mogę odczytać listy archiwum zestawu $archiwum." >&2
+    return 1
+  fi
+  if [ -z "$nazwy" ] || [ "$(wc -l <<< "$typy")" != "$(wc -l <<< "$nazwy")" ]; then
+    echo "Archiwum zestawu $archiwum jest puste albo ma nieczytelną listę." >&2
+    return 1
+  fi
+  while IFS= read -r linia; do
+    case "$linia" in
+      - | d) ;;
+      *)
+        echo "Archiwum zestawu $archiwum ma pozycję, która nie jest zwykłym plikiem ani folderem." >&2
+        return 1
+        ;;
+    esac
+  done <<< "$typy"
+  while IFS= read -r linia; do
+    case "$linia" in
+      /*)
+        echo "Archiwum zestawu $archiwum ma ścieżkę od /: $linia" >&2
+        return 1
+        ;;
+    esac
+    case "/$linia/" in
+      */../*)
+        echo "Archiwum zestawu $archiwum ma ścieżkę z członem ..: $linia" >&2
+        return 1
+        ;;
+    esac
+  done <<< "$nazwy"
+  mkdir -- "$folder" || return 1
+  if ! tar -xzf "$archiwum" -C "$folder" --no-same-owner 2> /dev/null; then
+    echo "Nie mogę rozpakować archiwum zestawu $archiwum." >&2
+    return 1
+  fi
+  if [ -n "$(find "$folder" ! -type f ! -type d -print -quit)" ]; then
+    echo "Archiwum zestawu $archiwum ma pozycję, która nie jest zwykłym plikiem ani folderem." >&2
+    return 1
+  fi
+  if [ ! -f "$folder/WERSJA" ] || [ ! -s "$folder/SUMY" ]; then
+    echo "Archiwum zestawu $archiwum nie ma pliku WERSJA albo listy SUMY." >&2
+    return 1
+  fi
+  if grep -qvE '^[0-9a-f]{64}  [^/].*$' "$folder/SUMY"; then
+    echo "Lista SUMY archiwum zestawu $archiwum ma linię spoza postaci <sha256>  <ścieżka>." >&2
+    return 1
+  fi
+  pliki=$(find "$folder" -type f ! -path "$folder/SUMY" ! -path "$folder/WERSJA" -printf '%P\n' | LC_ALL=C sort) || return 1
+  if [ "$pliki" != "$(cut -c 67- "$folder/SUMY" | LC_ALL=C sort)" ]; then
+    echo "Pliki archiwum zestawu $archiwum różnią się od listy SUMY (plik spoza listy albo brak pliku z listy)." >&2
+    return 1
+  fi
+  if ! (cd "$folder" && sha256sum -c --quiet --strict SUMY > /dev/null 2>&1); then
+    echo "Suma pliku archiwum zestawu $archiwum nie zgadza się z listą SUMY." >&2
+    return 1
+  fi
+}
+
+# archiwum_z_opcji: gdy podano --zestaw, kopiuje archiwum do $TMP/zestaw-fabryki.tar.gz i rozpakowuje kopię do
+# $TMP/zestaw (sprawdz_archiwum); zły plik albo złe archiwum przerywa instalator kodem 1.
+archiwum_z_opcji() {
+  [ -n "$ZESTAW_PLIK" ] || return 0
+  if [ -L "$ZESTAW_PLIK" ] || [ ! -f "$ZESTAW_PLIK" ]; then
+    przerwij "Archiwum zestawu $ZESTAW_PLIK nie jest zwykłym plikiem. Niczego nie zmieniono."
+  fi
+  cp -P -- "$ZESTAW_PLIK" "$TMP/zestaw-fabryki.tar.gz" || przerwij "Nie mogę odczytać archiwum $ZESTAW_PLIK. Niczego nie zmieniono."
+  if [ -L "$TMP/zestaw-fabryki.tar.gz" ]; then
+    przerwij "Archiwum zestawu $ZESTAW_PLIK nie jest zwykłym plikiem. Niczego nie zmieniono."
+  fi
+  sprawdz_archiwum "$TMP/zestaw-fabryki.tar.gz" "$TMP/zestaw" \
+    || przerwij "Archiwum zestawu $ZESTAW_PLIK nie przechodzi sprawdzenia. Niczego nie zmieniono."
+}
+
+# archiwum_z_wydania: tryb użytkownika bez --zestaw. Pobiera zestaw-fabryki.tar.gz z wydania WERSJA repozytorium REPO
+# do $TMP/zestaw-fabryki.tar.gz, sprawdza jego sumę z ZESTAW_SUMA i rozpakowuje je do $TMP/zestaw (sprawdz_archiwum).
+# Błąd pobrania, inna suma albo złe archiwum przerywa instalator kodem 1, zanim cokolwiek się zmieni. W trybie autora
+# i z --zestaw nic nie robi.
+archiwum_z_wydania() {
+  local archiwum="$TMP/zestaw-fabryki.tar.gz"
+  if [ "$TRYB" = autor ] || [ -n "$ZESTAW_PLIK" ]; then
+    return 0
+  fi
+  if ! curl -fsSL "https://github.com/${REPO}/releases/download/${WERSJA}/zestaw-fabryki.tar.gz" -o "$archiwum"; then
+    przerwij "Nie mogę pobrać archiwum zestawu Factory z wydania $WERSJA. Niczego nie zmieniono; sprawdź sieć i uruchom ponownie."
+  fi
+  if ! echo "$ZESTAW_SUMA  $archiwum" | sha256sum -c - > /dev/null 2>&1; then
+    przerwij "Suma SHA-256 archiwum zestawu Factory z wydania $WERSJA nie zgadza się z sumą w instalatorze. Niczego nie zmieniono."
+  fi
+  sprawdz_archiwum "$archiwum" "$TMP/zestaw" \
+    || przerwij "Archiwum zestawu Factory z wydania $WERSJA nie przechodzi sprawdzenia. Niczego nie zmieniono."
+  napisz "Archiwum zestawu Factory z wydania $WERSJA pobrane (suma SHA-256 zgodna)."
+}
+
 # --- warunki startu ----------------------------------------------------------------------------------------
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -136,11 +325,33 @@ case "$SYSTEM_WERSJA" in
   *) echo "Uwaga: Ubuntu $SYSTEM_WERSJA nie jest sprawdzone (sprawdzone: 24.04 i 26.04). Instalator idzie dalej." ;;
 esac
 
+czytaj_opcje "$@"
 cd /
 umask 022
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 POBRANE="$TMP/pliki"
+# Czas tego uruchomienia w nazwach kopii.
+CZAS=$(date +%Y%m%d-%H%M%S)
+ustal_tryb
+archiwum_z_opcji
+archiwum_z_wydania
+if [ "$TRYB" = autor ]; then
+  FOLDER_FABRYKI="$LAB_DIR"
+  FOLDER_INNEGO_TRYBU="$ZESTAW"
+else
+  FOLDER_FABRYKI="$ZESTAW"
+  FOLDER_INNEGO_TRYBU="$LAB_DIR"
+fi
+# Hak startu sesji konta fabryka z folderu Factory trybu; polecenie z folderu drugiego trybu znika z ustawień.
+HAK_FABRYKI="python3 -I -B $FOLDER_FABRYKI/scripts/hook_start_sesji.py"
+HAK_INNEGO_TRYBU="python3 -I -B $FOLDER_INNEGO_TRYBU/scripts/hook_start_sesji.py"
+if [ "$TRYB" = autor ]; then
+  OPIS_TRYBU="tryb autora: laboratorium Factory w $LAB_DIR zostaje klonem"
+else
+  OPIS_TRYBU="tryb użytkownika: pliki Factory w folderach roota tylko do odczytu"
+fi
+echo "Instalacja w trybie $TRYB ($OPIS_TRYBU)."
 
 # --- pobranie plików instalatora z tagu (przed każdą zmianą) ------------------------------------------------
 
@@ -156,6 +367,7 @@ touch "$LOG"
 chmod 0600 "$LOG"
 LOG_GOTOWY=1
 napisz "=== Instalator fabryki $WERSJA, $(date -Is) ==="
+napisz "Tryb instalacji: $TRYB ($OPIS_TRYBU)."
 gotowe "pliki instalatora w wersji $WERSJA pobrane"
 
 # --- pomocnicze --------------------------------------------------------------------------------------------
@@ -169,6 +381,156 @@ zainstaluj_plik() {
   fi
   install -m "$3" -o root -g root "$1" "$2" || przerwij "Nie mogę zapisać $2."
   return 0
+}
+
+# sumy_drzewa <folder>: jedna linia "<suma SHA-256>  <ścieżka>" na każdy plik folderu, posortowana po ścieżce (LC_ALL=C);
+# dowiązanie (bez podążania za nim) ma zamiast sumy "dowiazanie", a inny plik niż zwykły "inny".
+sumy_drzewa() {
+  local sciezka
+  find "$1" -mindepth 1 ! -type d -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' sciezka; do
+    if [ -L "$1/$sciezka" ]; then
+      printf 'dowiazanie  %s\n' "$sciezka"
+    elif [ -f "$1/$sciezka" ]; then
+      printf '%s  %s\n' "$(sha256sum < "$1/$sciezka" | cut -d ' ' -f 1)" "$sciezka"
+    else
+      printf 'inny  %s\n' "$sciezka"
+    fi
+  done
+}
+
+# wlasciciel_root <folder>: każdy plik i folder w folderze należy do root:root.
+wlasciciel_root() {
+  [ -z "$(find "$1" \( ! -uid 0 -o ! -gid 0 \) -print -quit)" ]
+}
+
+# tryby_jak_wzor <wzór> <cel>: cel ma te same ścieżki co wzór, foldery 0755, pliki 0644, a wykonywalne we wzorze 0755.
+tryby_jak_wzor() {
+  local oczekiwane
+  oczekiwane=$(find "$1" \( -type d -printf '755 %P\n' \) -o \( -type f -perm /111 -printf '755 %P\n' \) \
+    -o \( -type f -printf '644 %P\n' \) | LC_ALL=C sort) || return 1
+  [ "$oczekiwane" = "$(find "$2" -printf '%m %P\n' | LC_ALL=C sort)" ]
+}
+
+# drzewo_roota <wzór w $TMP> <cel poza /home> <nazwa>: kładzie drzewo roota z wzoru i przy każdym uruchomieniu
+# przywraca je do wzoru z kopią i wypisem.
+# - Bez celu (pierwsze położenie) kładzie wzór, bez wypisu przywróconych plików i bez kopii.
+# - Z celem porównuje go z ostatnim wzorem (lista $WZORY/<nazwa>.sumy), a bez listy z nowym wzorem. Każdy zmieniony
+#   albo brakujący plik wypisuje linią "przywrócony do wzoru" (bez listy: "różni się od wydania"), a dodatkowy
+#   "usunięty plik spoza wzoru"; zmieniony i dodatkowy plik albo dowiązanie kopiuje, bez podążania za dowiązaniem, do
+#   $KOPIE/$CZAS/<nazwa>/<ścieżka>, a folder kopii wypisuje jedną linią. Cel, który jest dowiązaniem albo nie jest
+#   folderem, przenosi do kopii w całości.
+# - Gdy cel różni się od nowego wzoru albo ma innego właściciela niż root:root lub inne tryby (tryby_jak_wzor), kładzie
+#   wzór obok celu i podmienia go dwoma mv, a stare drzewo usuwa (jego zmienione pliki są już w kopii). Przed podmianą
+#   $ZESTAW albo $ZARZADZANE przerywa instalator, gdy konto fabryka ma proces autopilota z zestawu albo gdy pgrep
+#   nie odpowiada (kod inny niż 0 i 1).
+# - Na końcu zapisuje listę sum nowego wzoru. DRZEWO_ZMIENIONE=1, gdy cel się zmienił, inaczej 0.
+drzewo_roota() {
+  local wzor="$1" cel="$2" nazwa="$3"
+  local lista="$WZORY/$3.sumy" kopia="$KOPIE/$CZAS/$3" nowe="$TMP/sumy-$3" stan="$TMP/stan-$3"
+  local odniesienie slowo porownanie rodzaj sciezka podmiana=0 obcy=0 skopiowane=0 kod_pgrep
+  DRZEWO_ZMIENIONE=0
+  if [ -n "$(find "$wzor" ! -type f ! -type d -print -quit)" ]; then
+    przerwij "Wzór $cel ma pozycję, która nie jest zwykłym plikiem ani folderem."
+  fi
+  sumy_drzewa "$wzor" > "$nowe" || przerwij "Nie mogę policzyć sum wzoru $cel."
+  folder_systemu "$(dirname "$cel")" root:root 0755
+  folder_systemu "$WZORY" root:root 0700
+  # Resztki przerwanego uruchomienia obok celu.
+  rm -rf --one-file-system -- "$cel".nowy-* "$cel".stary-*
+  if [ -L "$cel" ] || { [ -e "$cel" ] && [ ! -d "$cel" ]; }; then
+    obcy=1
+    podmiana=1
+  elif [ -d "$cel" ]; then
+    sumy_drzewa "$cel" > "$stan" || przerwij "Nie mogę policzyć sum $cel."
+    if ! cmp -s "$stan" "$nowe" || ! wlasciciel_root "$cel" || ! tryby_jak_wzor "$wzor" "$cel"; then
+      podmiana=1
+    fi
+  else
+    podmiana=1
+  fi
+  if [ "$podmiana" = 1 ] && { [ "$cel" = "$ZESTAW" ] || [ "$cel" = "${ZARZADZANE-}" ]; }; then
+    kod_pgrep=0
+    pgrep -u fabryka -f "$ZESTAW/scripts/autopilot.py" > /dev/null 2>&1 || kod_pgrep=$?
+    case "$kod_pgrep" in
+      0) przerwij "Konto fabryka ma działający przebieg autopilota z $ZESTAW. Poczekaj na koniec przebiegu i uruchom instalator ponownie; $cel się nie zmienił." ;;
+      1) ;;
+      *) przerwij "Nie mogę sprawdzić, czy konto fabryka ma działający przebieg autopilota (pgrep, kod $kod_pgrep); $cel się nie zmienił." ;;
+    esac
+  fi
+  if [ "$obcy" = 1 ]; then
+    folder_systemu "$KOPIE" root:root 0700
+    mkdir -p -- "$KOPIE/$CZAS"
+    mv -- "$cel" "$kopia" || przerwij "Nie mogę przenieść $cel do kopii $kopia."
+    napisz "  przeniesiony do kopii, bo nie jest folderem: $cel"
+    skopiowane=1
+  elif [ -d "$cel" ]; then
+    if [ -f "$lista" ]; then
+      odniesienie="$lista"
+      slowo="przywrócony do wzoru"
+    else
+      odniesienie="$nowe"
+      slowo="różni się od wydania"
+    fi
+    porownanie=$(LC_ALL=C awk '
+      { i = index($0, "  "); s = substr($0, 1, i - 1); p = substr($0, i + 2) }
+      FILENAME == ARGV[1] { wzor[p] = s; next }
+      { jest[p] = 1; if (!(p in wzor)) print "dodatkowy\t" p; else if (wzor[p] != s) print "zmieniony\t" p }
+      END { for (p in wzor) if (!(p in jest)) print "brak\t" p }' "$odniesienie" "$stan" | LC_ALL=C sort) \
+      || przerwij "Nie mogę porównać $cel ze wzorem."
+    while IFS=$'\t' read -r rodzaj sciezka; do
+      [ -n "$rodzaj" ] || continue
+      if [ "$rodzaj" = dodatkowy ]; then
+        napisz "  usunięty plik spoza wzoru: $cel/$sciezka"
+      else
+        napisz "  $slowo: $cel/$sciezka"
+      fi
+      # Brakujący plik nie ma wersji do kopii; jego ścieżki root nie otwiera (mogłaby iść przez dowiązanie).
+      [ "$rodzaj" != brak ] || continue
+      [ "$skopiowane" = 1 ] || folder_systemu "$KOPIE" root:root 0700
+      mkdir -p -- "$(dirname -- "$kopia/$sciezka")"
+      cp -a -- "$cel/$sciezka" "$kopia/$sciezka" || przerwij "Nie mogę skopiować $cel/$sciezka do kopii $kopia."
+      skopiowane=1
+    done <<< "$porownanie"
+  fi
+  if [ "$skopiowane" = 1 ]; then
+    napisz "  kopia zmienionych plików: $kopia"
+  fi
+  if [ "$podmiana" = 1 ]; then
+    cp -R -- "$wzor" "$cel.nowy-$CZAS" || przerwij "Nie mogę położyć wzoru obok $cel."
+    chown -R -h root:root "$cel.nowy-$CZAS" || przerwij "Nie mogę ustawić właściciela wzoru obok $cel."
+    chmod -R u=rwX,go=rX,ug-s "$cel.nowy-$CZAS" || przerwij "Nie mogę ustawić trybów wzoru obok $cel."
+    if [ -d "$cel" ]; then
+      mv -- "$cel" "$cel.stary-$CZAS" || przerwij "Nie mogę podmienić $cel."
+    fi
+    mv -- "$cel.nowy-$CZAS" "$cel" || przerwij "Nie mogę podmienić $cel; poprzednie drzewo jest w $cel.stary-$CZAS."
+    rm -rf --one-file-system -- "$cel.stary-$CZAS"
+    DRZEWO_ZMIENIONE=1
+    gotowe "$cel położony ze wzoru"
+  else
+    gotowe "$cel równy wzorowi"
+  fi
+  zainstaluj_plik "$nowe" "$lista" 0600 || true
+}
+
+# wzor_serwera <folder>: wzór drzewa $LIB z pobranych plików: start-fabryki.sh, skrzynka.py, start-obserwatora.sh,
+# umowa Maestro obserwator/CLAUDE.md (w trybie autora umowa i dodatek autora obserwator/CLAUDE-autor.md sklejone w jeden
+# plik, z pustą linią między nimi) i narzędzia Maestro obserwator/narzedzia/{wyslij.sh,porzadki-notatek.sh}. Skrypty
+# i narzędzia mają tryb 0755, umowa 0644.
+wzor_serwera() {
+  local wzor="$1" plik
+  mkdir -p -- "$wzor/obserwator/narzedzia" || przerwij "Nie mogę założyć wzoru plików serwera $wzor."
+  for plik in start-fabryki.sh skrzynka.py start-obserwatora.sh obserwator/narzedzia/wyslij.sh \
+    obserwator/narzedzia/porzadki-notatek.sh; do
+    cp -- "$POBRANE/$plik" "$wzor/$plik" || przerwij "Nie mogę położyć $plik we wzorze plików serwera."
+    chmod 0755 "$wzor/$plik" || przerwij "Nie mogę ustawić trybu $plik we wzorze plików serwera."
+  done
+  if [ "$TRYB" = autor ]; then
+    { cat -- "$POBRANE/obserwator/CLAUDE.md" && printf '\n' && cat -- "$POBRANE/obserwator/CLAUDE-autor.md"; } \
+      > "$wzor/obserwator/CLAUDE.md" || przerwij "Nie mogę skleić umowy Maestro z dodatkiem autora."
+  else
+    cp -- "$POBRANE/obserwator/CLAUDE.md" "$wzor/obserwator/CLAUDE.md" || przerwij "Nie mogę położyć umowy Maestro we wzorze."
+  fi
+  chmod 0644 "$wzor/obserwator/CLAUDE.md" || przerwij "Nie mogę ustawić trybu umowy Maestro we wzorze."
 }
 
 # w_grupie <konto> <grupa>
@@ -316,11 +678,6 @@ for konto in fabryka obserwator; do
 done
 gotowe "tryby katalogów domowych, grupy, umask kont fabryka i obserwator i zakresy podrzędnych identyfikatorów ustawione"
 
-install -d -m 0755 -o root -g root "$LIB"
-zainstaluj_plik "$POBRANE/start-fabryki.sh" "$LIB/start-fabryki.sh" 0755 || true
-zainstaluj_plik "$POBRANE/skrzynka.py" "$LIB/skrzynka.py" 0755 || true
-zainstaluj_plik "$POBRANE/start-obserwatora.sh" "$LIB/start-obserwatora.sh" 0755 || true
-
 if ! visudo -c -f "$POBRANE/sudoers-obserwator" > /dev/null; then
   przerwij "Reguła sudo obserwatora nie przechodzi visudo -c -f."
 fi
@@ -328,7 +685,7 @@ zainstaluj_plik "$POBRANE/sudoers-obserwator" "$SUDOERS_CEL" 0440 || true
 if ! visudo -c > /dev/null; then
   przerwij "Konfiguracja sudo nie przechodzi visudo -c po dodaniu reguły obserwatora."
 fi
-gotowe "skrypty startowe i reguła sudo obserwatora zainstalowane"
+gotowe "reguła sudo obserwatora zainstalowana"
 
 # folder_systemu <folder> <właściciel:grupa> <tryb>: folder systemu zakłada i poprawia root.
 folder_systemu() {
@@ -347,6 +704,14 @@ gotowe "foldery $SKRZYNKA, $WYNIKI i $PRZEKAZANIE założone"
 # Folder z v1.0.4, którego od v1.0.5 nie ma: zgody zapisuje autopilot jak na Macu.
 rm -rf --one-file-system -- "$SERWER/zaufane" || przerwij "Nie mogę usunąć folderu $SERWER/zaufane z v1.0.4."
 gotowe "folderu $SERWER/zaufane nie ma"
+zapisz_tryb
+gotowe "tryb $TRYB zapisany w $TRYB_PLIK"
+# Pliki serwera, umowa i narzędzia Maestro w drzewie roota $LIB: każde uruchomienie przywraca je do wzoru z kopią
+# i wypisem. Zmiana drzewa restartuje sesję obserwatora w etapie 7, bo umowę sesja dostaje przy starcie.
+WZOR_SERWERA="$TMP/serwer"
+wzor_serwera "$WZOR_SERWERA"
+drzewo_roota "$WZOR_SERWERA" "$LIB" serwer
+ZMIANA_SERWERA=$DRZEWO_ZMIENIONE
 
 # --- 3. Claude Code --------------------------------------------------------------------------------------
 
@@ -479,125 +844,140 @@ sudo -u fabryka gh auth setup-git
 # --- 6. folder obserwatora i ustawienia --------------------------------------------------------------------
 
 etap 6 "Folder obserwatora, umowa i ustawienia"
-sudo -u obserwator mkdir -p "$OBS_DIR" "$OBS_DIR/narzedzia" "$NOTATKI" "$ARCHIWUM" "$ARCHIWUM_NOTATEK" "$OBS_HOME/.claude"
+sudo -u obserwator mkdir -p "$OBS_DIR" "$NOTATKI" "$ARCHIWUM" "$ARCHIWUM_NOTATEK" "$OBS_HOME/.claude"
 # Klucze usług od człowieka (umowa obserwatora, „Panele usług”): folder tylko konta obserwator.
 sudo -u obserwator mkdir -p "$OBS_DIR/klucze"
 sudo -u obserwator chmod 0700 "$OBS_DIR/klucze"
-for skill in "${SKILLE_OBSERWATORA[@]}"; do
-  sudo -u obserwator mkdir -p "$OBS_SKILLE/$skill"
-done
 
-if sudo -u obserwator test -f "$OBS_DIR/CLAUDE.md"; then
-  if sudo -u obserwator cmp -s - "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md"; then
-    gotowe "umowa obserwatora równa wzorowi"
-  else
-    KOPIA="$OBS_DIR/CLAUDE.md.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
-    sudo -u obserwator cp "$OBS_DIR/CLAUDE.md" "$KOPIA"
-    sudo -u obserwator tee "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md" > /dev/null
-    gotowe "umowa obserwatora zastąpiona wzorem; poprzednia wersja w $KOPIA"
-  fi
-else
-  sudo -u obserwator tee "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md" > /dev/null
-  gotowe "umowa obserwatora zapisana"
-fi
+# przejscie_plikow_obserwatora: dawne pliki Maestro w folderze konta (do v1.0.17): umowa CLAUDE.md i narzędzia
+# narzedzia/wyslij.sh i narzedzia/porzadki-notatek.sh, gdy są, konto obserwator przenosi do nazw
+# <plik>.przed-instalatorem-$CZAS, bo umowa i narzędzia są w plikach roota $LIB/obserwator, a CLAUDE.md w folderze
+# sesji byłby drugą umową. Notatki, archiwum, archiwum notatek i klucze zostają nietknięte.
+przejscie_plikow_obserwatora() {
+  local plik
+  for plik in CLAUDE.md narzedzia/wyslij.sh narzedzia/porzadki-notatek.sh; do
+    if sudo -u obserwator test -e "$OBS_DIR/$plik" || sudo -u obserwator test -L "$OBS_DIR/$plik"; then
+      sudo -u obserwator mv -- "$OBS_DIR/$plik" "$OBS_DIR/$plik.przed-instalatorem-$CZAS" \
+        || przerwij "Konto obserwator nie może przenieść $OBS_DIR/$plik do kopii."
+      gotowe "dawny plik Maestro $OBS_DIR/$plik przeniesiony do $OBS_DIR/$plik.przed-instalatorem-$CZAS (jest w $LIB/obserwator)"
+    fi
+  done
+}
 
-# Narzędzie wysyłania wiadomości do sesji głównej (umowa, „Rozmowa z sesją główną”): wzór zastępuje inną treść,
-# poprzednia wersja zostaje jako kopia zapasowa; bit wykonywania ustawia konto obserwator.
-if sudo -u obserwator test -f "$OBS_DIR/narzedzia/wyslij.sh"; then
-  if sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh"; then
-    gotowe "narzędzie wysyłania obserwatora równe wzorowi"
-  else
-    KOPIA="$OBS_DIR/narzedzia/wyslij.sh.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
-    sudo -u obserwator cp "$OBS_DIR/narzedzia/wyslij.sh" "$KOPIA"
-    sudo -u obserwator tee "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh" > /dev/null
-    gotowe "narzędzie wysyłania obserwatora zastąpione wzorem; poprzednia wersja w $KOPIA"
-  fi
-else
-  sudo -u obserwator tee "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh" > /dev/null
-  gotowe "narzędzie wysyłania obserwatora zapisane"
-fi
-sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/wyslij.sh"
+# przejscie_skilli_obserwatora: tryb użytkownika. Konto obserwator przenosi każdy osobisty skill Maestro
+# z SKILLE_OBSERWATORA z ~/.claude/skills do $OBS_DIR/skille-przed-instalatorem-$CZAS/: skill porzadki-notatek jest
+# w $ZARZADZANE, a skille autora u użytkownika nie ma; kopia w folderze skilli dalej byłaby skillem. Przeniesienie
+# ustawia ZMIANA_SKILLA=1 (restart sesji w etapie 7). Inne skille zostają.
+przejscie_skilli_obserwatora() {
+  local skill kopia="$OBS_DIR/skille-przed-instalatorem-$CZAS" przeniesione=0
+  for skill in "${SKILLE_OBSERWATORA[@]}"; do
+    if sudo -u obserwator test -e "$OBS_SKILLE/$skill" || sudo -u obserwator test -L "$OBS_SKILLE/$skill"; then
+      if [ "$przeniesione" = 0 ]; then
+        sudo -u obserwator mkdir -p -- "$kopia"
+      fi
+      sudo -u obserwator mv -- "$OBS_SKILLE/$skill" "$kopia/$skill" \
+        || przerwij "Konto obserwator nie może przenieść skilla $OBS_SKILLE/$skill do $kopia."
+      przeniesione=1
+      ZMIANA_SKILLA=1
+      gotowe "osobisty skill Maestro $skill przeniesiony z $OBS_SKILLE do $kopia"
+    fi
+  done
+}
 
-# Narzędzie sprawdzenia notatek (umowa, „Pamięć”), uruchamiane hakami z ustawień obserwatora niżej: wzór zastępuje
-# inną treść, poprzednia wersja zostaje jako kopia zapasowa; bit wykonywania ustawia konto obserwator.
-if sudo -u obserwator test -f "$OBS_DIR/narzedzia/porzadki-notatek.sh"; then
-  if sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
-    < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh"; then
-    gotowe "narzędzie sprawdzenia notatek obserwatora równe wzorowi"
-  else
-    KOPIA="$OBS_DIR/narzedzia/porzadki-notatek.sh.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
-    sudo -u obserwator cp "$OBS_DIR/narzedzia/porzadki-notatek.sh" "$KOPIA"
-    sudo -u obserwator tee "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
-      < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" > /dev/null
-    gotowe "narzędzie sprawdzenia notatek obserwatora zastąpione wzorem; poprzednia wersja w $KOPIA"
-  fi
-else
-  sudo -u obserwator tee "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
-    < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" > /dev/null
-  gotowe "narzędzie sprawdzenia notatek obserwatora zapisane"
-fi
-sudo -u obserwator chmod 0755 "$OBS_DIR/narzedzia/porzadki-notatek.sh"
+przejscie_plikow_obserwatora
+gotowe "umowa i narzędzia Maestro w plikach roota $LIB/obserwator"
 
-# Skille obserwatora (osobiste skille Claude Code konta obserwator, SKILLE_OBSERWATORA): wzór zastępuje inną treść,
-# poprzednia wersja zostaje jako kopia zapasowa. Nowy albo zmieniony skill restartuje sesję obserwatora w etapie 7,
-# bo działająca sesja Claude Code nie widzi folderu skilli, którego nie było przy jej starcie.
+# Skille obserwatora w trybie autora (osobiste skille Claude Code konta obserwator, SKILLE_OBSERWATORA): wzór zastępuje
+# inną treść, poprzednia wersja zostaje jako kopia zapasowa. Nowy albo zmieniony skill restartuje sesję obserwatora
+# w etapie 7, bo działająca sesja Claude Code nie widzi folderu skilli, którego nie było przy jej starcie. W trybie
+# użytkownika osobiste skille Maestro wychodzą z folderu skilli (przejscie_skilli_obserwatora).
 ZMIANA_SKILLA=0
-for skill in "${SKILLE_OBSERWATORA[@]}"; do
-  if sudo -u obserwator test -f "$OBS_SKILLE/$skill/SKILL.md"; then
-    if sudo -u obserwator cmp -s - "$OBS_SKILLE/$skill/SKILL.md" \
-      < "$POBRANE/obserwator/skills/$skill/SKILL.md"; then
-      gotowe "skill obserwatora $skill równy wzorowi"
+if [ "$TRYB" = autor ]; then
+  for skill in "${SKILLE_OBSERWATORA[@]}"; do
+    sudo -u obserwator mkdir -p "$OBS_SKILLE/$skill"
+  done
+  for skill in "${SKILLE_OBSERWATORA[@]}"; do
+    if sudo -u obserwator test -f "$OBS_SKILLE/$skill/SKILL.md"; then
+      if sudo -u obserwator cmp -s - "$OBS_SKILLE/$skill/SKILL.md" \
+        < "$POBRANE/obserwator/skills/$skill/SKILL.md"; then
+        gotowe "skill obserwatora $skill równy wzorowi"
+      else
+        KOPIA="$OBS_SKILLE/$skill/SKILL.md.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
+        sudo -u obserwator cp "$OBS_SKILLE/$skill/SKILL.md" "$KOPIA"
+        sudo -u obserwator tee "$OBS_SKILLE/$skill/SKILL.md" \
+          < "$POBRANE/obserwator/skills/$skill/SKILL.md" > /dev/null
+        ZMIANA_SKILLA=1
+        gotowe "skill obserwatora $skill zastąpiony wzorem; poprzednia wersja w $KOPIA"
+      fi
     else
-      KOPIA="$OBS_SKILLE/$skill/SKILL.md.przed-instalatorem-$(date +%Y%m%d-%H%M%S)"
-      sudo -u obserwator cp "$OBS_SKILLE/$skill/SKILL.md" "$KOPIA"
       sudo -u obserwator tee "$OBS_SKILLE/$skill/SKILL.md" \
         < "$POBRANE/obserwator/skills/$skill/SKILL.md" > /dev/null
       ZMIANA_SKILLA=1
-      gotowe "skill obserwatora $skill zastąpiony wzorem; poprzednia wersja w $KOPIA"
+      gotowe "skill obserwatora $skill zapisany"
     fi
-  else
-    sudo -u obserwator tee "$OBS_SKILLE/$skill/SKILL.md" \
-      < "$POBRANE/obserwator/skills/$skill/SKILL.md" > /dev/null
-    ZMIANA_SKILLA=1
-    gotowe "skill obserwatora $skill zapisany"
-  fi
-done
+  done
+else
+  przejscie_skilli_obserwatora
+fi
 
-# Folder serwera, laboratorium i projektów do odczytu, zapis narzędziami plikowymi tylko w skrzynce, a w laboratorium
-# i projektach reguła deny dla Edit; inne wpisy permissions zostają, nowe dochodzą bez duplikatów, a znika każdy wpis
-# z folderem $SERWER/zaufane z v1.0.4, każdy inny folder konta fabryka w additionalDirectories i każda reguła allow
-# z folderem konta fabryka. Zapis narzędziami plikowymi także w archiwum notatek, bez pytania (umowa, „Pamięć”).
-# Dwa haki uruchamiają sprawdzenie notatek bez duplikatu: SessionStart przy każdym starcie sesji (także wznowieniu
-# i po kompaktowaniu) i UserPromptSubmit z --co-miesiac raz na miesiąc kalendarzowy; inne haki zostają.
+# Folder serwera i projektów do odczytu, w trybie autora także laboratorium, a w trybie użytkownika zestaw Factory
+# ($foldery); zapis narzędziami plikowymi tylko w skrzynce, a w projektach i w trybie autora w laboratorium reguła deny
+# dla Edit ($zakazy). Inne wpisy permissions zostają, nowe dochodzą bez duplikatów, a znika każdy wpis z folderem
+# $SERWER/zaufane z v1.0.4, każdy folder konta fabryka spoza $foldery w additionalDirectories (w trybie użytkownika
+# także laboratorium), każda reguła allow z folderem konta fabryka i w trybie użytkownika reguła deny laboratorium.
+# Zapis narzędziami plikowymi także w archiwum notatek, bez pytania (umowa, „Pamięć”). Dwa haki uruchamiają
+# sprawdzenie notatek z $LIB/obserwator/narzedzia bez duplikatu: SessionStart przy każdym starcie sesji (także
+# wznowieniu i po kompaktowaniu) i UserPromptSubmit z --co-miesiac raz na miesiąc kalendarzowy; polecenia z dawną
+# ścieżką narzędzia w folderze obserwatora znikają, a inne haki zostają.
 ARGI_USTAWIEN=(--arg notatki "$NOTATKI" --arg serwer "$SERWER" --arg skrzynka "$SKRZYNKA" --arg zaufane "$SERWER/zaufane"
   --arg lab "$LAB_DIR" --arg projekty "$FAB_HOME/projekty" --arg dom "$FAB_HOME"
-  --arg porzadki "$OBS_DIR/narzedzia/porzadki-notatek.sh"
-  --arg porzadki_miesiac "$OBS_DIR/narzedzia/porzadki-notatek.sh --co-miesiac"
+  --arg zestaw "$ZESTAW" --arg tryb "$TRYB"
+  --arg porzadki "$LIB/obserwator/narzedzia/porzadki-notatek.sh"
+  --arg porzadki_miesiac "$LIB/obserwator/narzedzia/porzadki-notatek.sh --co-miesiac"
+  --arg stary_porzadki "$OBS_DIR/narzedzia/porzadki-notatek.sh"
+  --arg stary_porzadki_miesiac "$OBS_DIR/narzedzia/porzadki-notatek.sh --co-miesiac"
   --arg archiwum_notatek "$ARCHIWUM_NOTATEK")
-WARUNEK_USTAWIEN='.cleanupPeriodDays == 365 and .autoMemoryDirectory == $notatki
+WARUNEK_USTAWIEN='(if $tryb == "autor" then [$serwer, $lab, $projekty] else [$serwer, $projekty, $zestaw] end) as $foldery
+  | ((if $tryb == "autor" then ["Edit(/\($lab)/**)"] else [] end) + ["Edit(/\($projekty)/**)"]) as $zakazy
+  | .cleanupPeriodDays == 365 and .autoMemoryDirectory == $notatki
   and .inputNeededNotifEnabled == true and .agentPushNotifEnabled == true and .remoteControlAtStartup == true
-  and ([$serwer, $lab, $projekty] - (.permissions.additionalDirectories // []) | length == 0)
-  and ([.permissions.additionalDirectories[]? | select(type == "string" and (. == $dom or startswith($dom + "/"))
-      and . != $lab and . != $projekty)] | length == 0)
+  and ($foldery - (.permissions.additionalDirectories // []) | length == 0)
+  and ([.permissions.additionalDirectories[]? | select(type == "string" and (. == $dom or startswith($dom + "/")))
+      | select(. as $f | any($foldery[]; . == $f) | not)] | length == 0)
   and (["Edit(/\($skrzynka)/**)", "Edit(/\($archiwum_notatek)/**)"] - (.permissions.allow // []) | length == 0)
   and ([.permissions.allow[]? | select(contains($zaufane) or contains($dom))] | length == 0)
-  and (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - (.permissions.deny // []) | length == 0)
+  and ($zakazy - (.permissions.deny // []) | length == 0)
+  and ($tryb == "autor" or (any(.permissions.deny[]?; . == "Edit(/\($lab)/**)") | not))
   and any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $porzadki)
-  and any(.hooks.UserPromptSubmit[]?.hooks[]?; .type == "command" and .command == $porzadki_miesiac)'
-FILTR_USTAWIEN='. + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
+  and any(.hooks.UserPromptSubmit[]?.hooks[]?; .type == "command" and .command == $porzadki_miesiac)
+  and (any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $stary_porzadki) | not)
+  and (any(.hooks.UserPromptSubmit[]?.hooks[]?; .type == "command" and .command == $stary_porzadki_miesiac) | not)'
+FILTR_USTAWIEN='(if $tryb == "autor" then [$serwer, $lab, $projekty] else [$serwer, $projekty, $zestaw] end) as $foldery
+  | ((if $tryb == "autor" then ["Edit(/\($lab)/**)"] else [] end) + ["Edit(/\($projekty)/**)"]) as $zakazy
+  | . + {cleanupPeriodDays: 365, autoMemoryDirectory: $notatki,
   inputNeededNotifEnabled: true, agentPushNotifEnabled: true, remoteControlAtStartup: true}
   | .permissions = (.permissions // {})
   | .permissions.additionalDirectories = ((.permissions.additionalDirectories // [])
-      | map(select((type == "string" and (. == $dom or startswith($dom + "/")) and . != $lab and . != $projekty) | not))
-        as $a | $a + ([$serwer, $lab, $projekty] - $a))
+      | map(select((type == "string" and (. == $dom or startswith($dom + "/"))
+          and (. as $f | any($foldery[]; . == $f) | not)) | not))
+        as $a | $a + ($foldery - $a))
   | .permissions.allow = ((.permissions.allow // []) | map(select((contains($zaufane) or contains($dom)) | not)) as $a
       | $a + (["Edit(/\($skrzynka)/**)", "Edit(/\($archiwum_notatek)/**)"] - $a))
-  | .permissions.deny = ((.permissions.deny // []) as $a | $a + (["Edit(/\($lab)/**)", "Edit(/\($projekty)/**)"] - $a))
+  | .permissions.deny = ((.permissions.deny // []) | map(select((. == "Edit(/\($lab)/**)" and $tryb != "autor") | not))
+      as $a | $a + ($zakazy - $a))
   | .hooks = (.hooks // {})
-  | .hooks.SessionStart = ((.hooks.SessionStart // []) as $s
+  | .hooks.SessionStart = ((.hooks.SessionStart // [])
+      | map(if any(.hooks[]?; .type == "command" and .command == $stary_porzadki)
+          then (.hooks |= map(select((.type == "command" and .command == $stary_porzadki) | not)))
+            | select(.hooks | length > 0)
+          else . end) as $s
       | if any($s[]?.hooks[]?; .type == "command" and .command == $porzadki) then $s
         else $s + [{hooks: [{type: "command", command: $porzadki}]}] end)
-  | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) as $s
+  | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // [])
+      | map(if any(.hooks[]?; .type == "command" and .command == $stary_porzadki_miesiac)
+          then (.hooks |= map(select((.type == "command" and .command == $stary_porzadki_miesiac) | not)))
+            | select(.hooks | length > 0)
+          else . end) as $s
       | if any($s[]?.hooks[]?; .type == "command" and .command == $porzadki_miesiac) then $s
         else $s + [{hooks: [{type: "command", command: $porzadki_miesiac}]}] end)'
 if ! sudo -u obserwator test -s "$OBS_SETTINGS"; then
@@ -638,7 +1018,8 @@ if zainstaluj_plik "$POBRANE/obserwator.service" "$JEDNOSTKI/obserwator.service"
   systemctl daemon-reload
 fi
 systemctl enable obserwator.service > /dev/null 2>&1 || przerwij "Nie mogę włączyć usługi obserwator.service."
-if { [ "$ZMIANA_USLUGI" -eq 1 ] || [ "$ZMIANA_SKILLA" -eq 1 ]; } && systemctl is-active --quiet obserwator.service; then
+if { [ "$ZMIANA_USLUGI" -eq 1 ] || [ "$ZMIANA_SKILLA" -eq 1 ] || [ "$ZMIANA_SERWERA" -eq 1 ]; } \
+  && systemctl is-active --quiet obserwator.service; then
   systemctl restart obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
 else
   systemctl start obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
@@ -694,28 +1075,9 @@ systemctl enable --now fabryka-retencja-obserwatora.timer > /dev/null 2>&1 \
   || przerwij "Nie mogę włączyć zadania fabryka-retencja-obserwatora.timer."
 gotowe "zadanie retencji włączone (pliki archiwum starsze niż 365 dni; notatki i archiwum notatek zostają)"
 
-# --- 9. klon laboratorium ----------------------------------------------------------------------------------
+# --- 9. pliki Factory ---------------------------------------------------------------------------------------
 
-etap 9 "Laboratorium fabryki na koncie fabryka"
-if sudo -u fabryka test -d "$LAB_DIR/.git"; then
-  KLON_BYL=1
-  gotowe "klon laboratorium już jest (bez pobierania zmian)"
-else
-  KLON_BYL=0
-  if [ -z "${FABRYKA_REPO:-}" ]; then
-    LOGIN_GITHUB=$(sudo -u fabryka gh api user --jq .login)
-    FABRYKA_REPO="$LOGIN_GITHUB/fabryka"
-  fi
-  if ! sudo -u fabryka gh repo view "$FABRYKA_REPO" > /dev/null 2>&1; then
-    napisz "  Nie widzę repozytorium $FABRYKA_REPO na koncie GitHub fabryki."
-    read -r -p "  Podaj repozytorium laboratorium (właściciel/nazwa): " FABRYKA_REPO || true
-    if ! sudo -u fabryka gh repo view "$FABRYKA_REPO" > /dev/null 2>&1; then
-      przerwij "Repozytorium $FABRYKA_REPO nie jest dostępne dla konta GitHub fabryki."
-    fi
-  fi
-  sudo -u fabryka git clone "https://github.com/${FABRYKA_REPO}.git" "$LAB_DIR"
-  gotowe "laboratorium sklonowane z $FABRYKA_REPO"
-fi
+etap 9 "Pliki Factory"
 
 # skille_laboratorium: nazwy folderów skilli klonu, po jednej w linii (czyta konto fabryka).
 skille_laboratorium() {
@@ -776,33 +1138,146 @@ skille_fabryki() {
   gotowe "skille laboratorium skopiowane do $FAB_SKILLE"
 }
 
-# Hak startu sesji konta fabryka w bloku jak w docs/start-projektu.md; inne klucze zostają, bez duplikatu.
-WARUNEK_HAKA='any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $polecenie)'
+# Hak startu sesji konta fabryka w bloku jak w docs/start-projektu.md; inne klucze zostają, bez duplikatu. Polecenie
+# haka z folderu Factory drugiego trybu ($stary) znika, a blok, który miał tylko je, znika razem z nim.
+WARUNEK_HAKA='any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $polecenie)
+  and (any(.hooks.SessionStart[]?.hooks[]?; .type == "command" and .command == $stary) | not)'
 FILTR_HAKA='.hooks = (.hooks // {})
-  | .hooks.SessionStart = ((.hooks.SessionStart // []) as $s
+  | .hooks.SessionStart = (((.hooks.SessionStart // [])
+      | map(if any(.hooks[]?; .type == "command" and .command == $stary)
+          then (.hooks |= map(select((.type == "command" and .command == $stary) | not))) | select(.hooks | length > 0)
+          else . end)) as $s
       | if any($s[]?.hooks[]?; .type == "command" and .command == $polecenie) then $s
         else $s + [{hooks: [{type: "command", command: $polecenie}]}] end)'
 
-# ustawienia_fabryki: hak startu sesji w ~/.claude/settings.json konta fabryka (pusty {}, gdy pliku nie ma);
-# niepoprawny JSON przerywa instalator.
+# ustawienia_fabryki: hak startu sesji z folderu Factory trybu (HAK_FABRYKI) w ~/.claude/settings.json konta fabryka
+# (pusty {}, gdy pliku nie ma), bez polecenia haka drugiego trybu (HAK_INNEGO_TRYBU); niepoprawny JSON przerywa
+# instalator.
 ustawienia_fabryki() {
   sudo -u fabryka -H mkdir -p "$FAB_HOME/.claude"
   if ! sudo -u fabryka -H test -s "$FAB_SETTINGS"; then
     printf '{}\n' | sudo -u fabryka -H tee "$FAB_SETTINGS" > /dev/null
   fi
-  if sudo -u fabryka -H jq -e --arg polecenie "$HAK_FABRYKI" "$WARUNEK_HAKA" "$FAB_SETTINGS" > /dev/null 2>&1; then
+  if sudo -u fabryka -H jq -e --arg polecenie "$HAK_FABRYKI" --arg stary "$HAK_INNEGO_TRYBU" "$WARUNEK_HAKA" \
+    "$FAB_SETTINGS" > /dev/null 2>&1; then
     gotowe "hak startu sesji w ustawieniach Claude Code konta fabryka już jest"
     return 0
   fi
-  if ! sudo -u fabryka -H jq --arg polecenie "$HAK_FABRYKI" "$FILTR_HAKA" "$FAB_SETTINGS" > "$TMP/settings-fabryki.json"; then
+  if ! sudo -u fabryka -H jq --arg polecenie "$HAK_FABRYKI" --arg stary "$HAK_INNEGO_TRYBU" "$FILTR_HAKA" \
+    "$FAB_SETTINGS" > "$TMP/settings-fabryki.json"; then
     przerwij "Ustawienia Claude Code konta fabryka (.claude/settings.json) nie są poprawnym JSON-em."
   fi
   sudo -u fabryka -H tee "$FAB_SETTINGS" < "$TMP/settings-fabryki.json" > /dev/null
-  gotowe "hak startu sesji dopisany do ustawień Claude Code konta fabryka (inne klucze bez zmian)"
+  gotowe "hak startu sesji z $FOLDER_FABRYKI w ustawieniach Claude Code konta fabryka (inne klucze bez zmian)"
 }
 
-skille_fabryki
+# przejscie_skilli_fabryki: tryb użytkownika. Konto fabryka przenosi każdy skill ze skille_zainstalowane (zapis
+# $FAB_SKILLE_ZAPIS, a bez zapisu historia skills/ klonu sprzed tego uruchomienia) z ~/.claude/skills do
+# ~/.local/state/fabryka/skille-przed-instalatorem-$CZAS/, bo skille Factory są już w $ZARZADZANE, a kopia w folderze
+# skilli dalej byłaby skillem. Potem usuwa zapis. Nazwa spoza wzoru ^[A-Za-z0-9][A-Za-z0-9._-]*$ zostaje; inne foldery
+# skilli, projekty i klon zostają.
+przejscie_skilli_fabryki() {
+  local nazwy nazwa kopia="$FAB_HOME/.local/state/fabryka/skille-przed-instalatorem-$CZAS" przeniesione=0
+  nazwy=$(skille_zainstalowane) \
+    || przerwij "Nie mogę odczytać skilli, które instalator skopiował wcześniej ($FAB_SKILLE_ZAPIS albo historia skills/ w $LAB_DIR)."
+  while IFS= read -r nazwa; do
+    [[ "$nazwa" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+    if sudo -u fabryka -H test -e "$FAB_SKILLE/$nazwa" || sudo -u fabryka -H test -L "$FAB_SKILLE/$nazwa"; then
+      if [ "$przeniesione" = 0 ]; then
+        sudo -u fabryka -H mkdir -p -- "$kopia"
+      fi
+      sudo -u fabryka -H mv -- "$FAB_SKILLE/$nazwa" "$kopia/$nazwa" \
+        || przerwij "Konto fabryka nie może przenieść skilla $FAB_SKILLE/$nazwa do $kopia."
+      przeniesione=1
+      gotowe "kopia skilla Factory $nazwa przeniesiona z $FAB_SKILLE do $kopia"
+    fi
+  done <<< "$nazwy"
+  sudo -u fabryka -H rm -f -- "$FAB_SKILLE_ZAPIS"
+}
+
+# zestaw_fabryki: tryb użytkownika. Wzór zestawu to archiwum rozpakowane w $TMP/zestaw przed pobraniem plików: z wydania
+# WERSJA (archiwum_z_wydania) albo z --zestaw (archiwum_z_opcji). drzewo_roota kładzie zestaw w $ZESTAW i skille zestawu
+# ze skillem porzadki-notatek Maestro z pobranych plików w $ZARZADZANE.
+zestaw_fabryki() {
+  [ -d "$TMP/zestaw/skills" ] || przerwij "Zestaw Factory nie ma folderu skills."
+  [ ! -e "$TMP/zestaw/skills/porzadki-notatek" ] || przerwij "Zestaw Factory ma skill porzadki-notatek, który jest skillem Maestro."
+  mkdir -p -- "$TMP/zarzadzane/porzadki-notatek"
+  cp -R -- "$TMP/zestaw/skills/." "$TMP/zarzadzane/"
+  cp -- "$POBRANE/obserwator/skills/porzadki-notatek/SKILL.md" "$TMP/zarzadzane/porzadki-notatek/SKILL.md"
+  folder_systemu "${ZARZADZANE%/.claude/skills}" root:root 0755
+  drzewo_roota "$TMP/zestaw" "$ZESTAW" zestaw
+  drzewo_roota "$TMP/zarzadzane" "$ZARZADZANE" zarzadzane
+  gotowe "zestaw Factory $(head -n 1 -- "$ZESTAW/WERSJA") w $ZESTAW, skille Factory w $ZARZADZANE"
+}
+
+# tozsamosc_gita: gdy konto fabryka nie ma globalnej tożsamości gita (user.name), ustawia ją: w trybie autora z lokalnej
+# konfiguracji klonu laboratorium, w trybie użytkownika z konta GitHub fabryki (login i adres
+# <id>+<login>@users.noreply.github.com). Bez źródła wypisuje uwagę i nic nie zmienia. Czyta i zapisuje konto fabryka.
+tozsamosc_gita() {
+  local nazwa="" adres="" konto=""
+  if [ -n "$(sudo -u fabryka -H git config --global user.name 2> /dev/null || true)" ]; then
+    gotowe "globalna tożsamość gita konta fabryka już jest"
+    return 0
+  fi
+  if [ "$TRYB" = autor ]; then
+    nazwa=$(sudo -u fabryka -H git -C "$LAB_DIR" config --local user.name 2> /dev/null) || nazwa=""
+    adres=$(sudo -u fabryka -H git -C "$LAB_DIR" config --local user.email 2> /dev/null) || adres=""
+  else
+    konto=$(sudo -u fabryka -H gh api user --jq '"\(.id) \(.login)"' 2> /dev/null) || konto=""
+    if [[ "$konto" =~ ^([0-9]+)\ ([A-Za-z0-9-]+)$ ]]; then
+      nazwa="${BASH_REMATCH[2]}"
+      adres="${BASH_REMATCH[1]}+${BASH_REMATCH[2]}@users.noreply.github.com"
+    fi
+  fi
+  if [ -z "$nazwa" ] || [ -z "$adres" ]; then
+    napisz "  Uwaga: konto fabryka nie ma globalnej tożsamości gita i nie mam jej źródła; ustaw ją: sudo -u fabryka -H git config --global user.name <nazwa> i user.email <adres>."
+    return 0
+  fi
+  sudo -u fabryka -H git config --global user.name "$nazwa"
+  sudo -u fabryka -H git config --global user.email "$adres"
+  gotowe "globalna tożsamość gita konta fabryka ustawiona ($nazwa)"
+}
+
+if [ "$TRYB" = autor ]; then
+  if sudo -u fabryka test -d "$LAB_DIR/.git"; then
+    KLON_BYL=1
+    gotowe "klon laboratorium już jest (bez pobierania zmian)"
+  else
+    KLON_BYL=0
+    if [ -z "${FABRYKA_REPO:-}" ]; then
+      LOGIN_GITHUB=$(sudo -u fabryka gh api user --jq .login)
+      FABRYKA_REPO="$LOGIN_GITHUB/fabryka"
+    fi
+    if ! sudo -u fabryka gh repo view "$FABRYKA_REPO" > /dev/null 2>&1; then
+      napisz "  Nie widzę repozytorium $FABRYKA_REPO na koncie GitHub fabryki."
+      read -r -p "  Podaj repozytorium laboratorium (właściciel/nazwa): " FABRYKA_REPO || true
+      if ! sudo -u fabryka gh repo view "$FABRYKA_REPO" > /dev/null 2>&1; then
+        przerwij "Repozytorium $FABRYKA_REPO nie jest dostępne dla konta GitHub fabryki."
+      fi
+    fi
+    sudo -u fabryka git clone "https://github.com/${FABRYKA_REPO}.git" "$LAB_DIR"
+    gotowe "laboratorium sklonowane z $FABRYKA_REPO"
+  fi
+  if [ -n "$ZESTAW_PLIK" ]; then
+    napisz "  Uwaga: w trybie autora Factory działa z klonu laboratorium; archiwum zestawu $ZESTAW_PLIK nie jest kładzione."
+  fi
+  skille_fabryki
+else
+  if sudo -u fabryka test -d "$LAB_DIR/.git"; then
+    KLON_BYL=1
+  else
+    KLON_BYL=0
+  fi
+  zestaw_fabryki
+  # Etap 7 startuje sesję obserwatora przed założeniem $ZARZADZANE (ze skillem porzadki-notatek), a działająca sesja
+  # nie widzi folderu skilli, którego nie było przy jej starcie: zmiana drzewa $ZARZADZANE restartuje sesję.
+  if [ "$DRZEWO_ZMIENIONE" -eq 1 ] && systemctl is-active --quiet obserwator.service; then
+    systemctl restart obserwator.service || napisz "  Uwaga: usługa obserwator.service nie wystartowała; szczegóły na liście sprawdzeń."
+  fi
+  przejscie_skilli_fabryki
+fi
 ustawienia_fabryki
+tozsamosc_gita
 
 # Folder projektów aplikacji konta fabryka (obserwator czyta go przez grupę fabryka); zakłada go konto fabryka.
 sudo -u fabryka mkdir -p "$FAB_HOME/projekty"
@@ -831,8 +1306,10 @@ fabryka_nie_widzi_obserwatora() {
   ! sudo -u fabryka ls "$OBS_HOME" && ! sudo -u fabryka test -w "$OBS_HOME"
 }
 
+# obserwator_czyta_laboratorium: obserwator czyta CLAUDE.md folderu Factory trybu (klon laboratorium w trybie autora,
+# zestaw w trybie użytkownika) i folder projektów.
 obserwator_czyta_laboratorium() {
-  sudo -u obserwator cat "$LAB_DIR/CLAUDE.md" > /dev/null && sudo -u obserwator ls "$FAB_HOME/projekty" > /dev/null
+  sudo -u obserwator cat "$FOLDER_FABRYKI/CLAUDE.md" > /dev/null && sudo -u obserwator ls "$FAB_HOME/projekty" > /dev/null
 }
 
 regula_sudo_obserwatora() {
@@ -915,8 +1392,77 @@ skille_fabryki_rowne_klonowi() {
   done <<< "$lista"
 }
 
+# drzewo_rowne_wzorowi <cel> <nazwa>: dodatni sygnał; cel jest folderem (nie dowiązaniem), a jego sumy (sumy_drzewa)
+# równają się liście $WZORY/<nazwa>.sumy ostatnio położonego wzoru.
+drzewo_rowne_wzorowi() {
+  local stan
+  [ -s "$WZORY/$2.sumy" ] && [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  stan=$(sumy_drzewa "$1") || return 1
+  [ -n "$stan" ] && [ "$stan" = "$(cat -- "$WZORY/$2.sumy")" ]
+}
+
+# root_bez_zapisu_innych <folder>: dodatni sygnał; folder (nie dowiązanie) i każdy plik i folder w nim należą do
+# root:root bez zapisu dla grupy i innych, a każdy folder nadrzędny aż do / należy do roota bez zapisu dla grupy
+# i innych.
+root_bez_zapisu_innych() {
+  local folder="$1" lista linia nadrzedny
+  [ -d "$folder" ] && [ ! -L "$folder" ] || return 1
+  lista=$(find "$folder" -print0 | xargs -0 stat -c '%u:%g %a') || return 1
+  [ -n "$lista" ] || return 1
+  while IFS= read -r linia; do
+    [ "${linia%% *}" = "0:0" ] || return 1
+    [ $((8#${linia#* } & 8#022)) -eq 0 ] || return 1
+  done <<< "$lista"
+  nadrzedny=$(dirname -- "$folder")
+  while :; do
+    linia=$(stat -c '%u:%g %a' -- "$nadrzedny") || return 1
+    [ "${linia%%:*}" = 0 ] || return 1
+    [ $((8#${linia#* } & 8#022)) -eq 0 ] || return 1
+    [ "$nadrzedny" != / ] || break
+    nadrzedny=$(dirname -- "$nadrzedny")
+  done
+}
+
+# konto_nie_zmienia_zestawu <konto>: dodatni sygnał czterech warunków. Root kładzie w $ZESTAW plik próbny i w
+# $ZARZADZANE folder próbny skilla; konto nie tworzy nowego pliku w zestawie, nie dopisuje do pliku próbnego, nie usuwa
+# go i nie zmienia nazwy folderu skilla. Kod 0 tylko, gdy zachodzą wszystkie cztery; próby sprząta root.
+konto_nie_zmienia_zestawu() {
+  local konto="$1" wynik=0
+  local probny="$ZESTAW/.proba-roota-$$" nowy="$ZESTAW/.proba-$1-$$" skill="$ZARZADZANE/.proba-roota-$$"
+  [ -d "$ZESTAW" ] && [ -d "$ZARZADZANE" ] || return 1
+  printf 'proba\n' > "$probny" || return 1
+  if ! mkdir -- "$skill"; then
+    rm -f -- "$probny"
+    return 1
+  fi
+  if sudo -u "$konto" touch "$nowy" 2> /dev/null; then
+    wynik=1
+  fi
+  if sudo -u "$konto" tee -a "$probny" < /dev/null > /dev/null 2>&1; then
+    wynik=1
+  fi
+  sudo -u "$konto" rm -f "$probny" 2> /dev/null || true
+  if [ ! -e "$probny" ]; then
+    wynik=1
+  fi
+  if sudo -u "$konto" mv "$skill" "$skill.nowa" 2> /dev/null; then
+    wynik=1
+  fi
+  rm -rf -- "$probny" "$nowy" "$skill" "$skill.nowa"
+  return "$wynik"
+}
+
+# konto_czyta_zestaw <konto>: konto czyta $ZESTAW/CLAUDE.md i SKILL.md pierwszego skilla w $ZARZADZANE.
+konto_czyta_zestaw() {
+  local skill
+  skill=$(find "$ZARZADZANE" -mindepth 2 -maxdepth 2 -name SKILL.md -print -quit) || return 1
+  [ -n "$skill" ] || return 1
+  sudo -u "$1" cat "$ZESTAW/CLAUDE.md" > /dev/null && sudo -u "$1" cat "$skill" > /dev/null
+}
+
 hak_fabryki() {
-  sudo -u fabryka -H jq -e --arg polecenie "$HAK_FABRYKI" "$WARUNEK_HAKA" "$FAB_SETTINGS" > /dev/null
+  sudo -u fabryka -H jq -e --arg polecenie "$HAK_FABRYKI" --arg stary "$HAK_INNEGO_TRYBU" "$WARUNEK_HAKA" \
+    "$FAB_SETTINGS" > /dev/null
 }
 
 # bez_zaufanych: folderu $SERWER/zaufane z v1.0.4 nie ma (ani dowiązania o tej nazwie).
@@ -924,19 +1470,72 @@ bez_zaufanych() {
   [ ! -e "$SERWER/zaufane" ] && [ ! -L "$SERWER/zaufane" ]
 }
 
+# plik_serwera <plik w $LIB> <wzór>: dodatni sygnał; plik (nie dowiązanie) należy do root:root bez zapisu dla grupy
+# i innych, ma treść wzoru, a konto obserwator go czyta.
+plik_serwera() {
+  local prawa
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  prawa=$(stat -c '%u:%g %a' -- "$1") || return 1
+  [ "${prawa%% *}" = "0:0" ] || return 1
+  [ $((8#${prawa#* } & 8#022)) -eq 0 ] || return 1
+  cmp -s -- "$2" "$1" && sudo -u obserwator test -r "$1"
+}
+
+# umowa_rowna_wzorowi: umowa Maestro w $LIB/obserwator/CLAUDE.md to wzór trybu (w trybie autora z dodatkiem autora).
 umowa_rowna_wzorowi() {
-  sudo -u obserwator cmp -s - "$OBS_DIR/CLAUDE.md" < "$POBRANE/obserwator/CLAUDE.md"
+  plik_serwera "$LIB/obserwator/CLAUDE.md" "$WZOR_SERWERA/obserwator/CLAUDE.md"
 }
 
 wyslij_rowny_wzorowi() {
-  sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/wyslij.sh" < "$POBRANE/obserwator/narzedzia/wyslij.sh" \
-    && sudo -u obserwator test -x "$OBS_DIR/narzedzia/wyslij.sh"
+  plik_serwera "$LIB/obserwator/narzedzia/wyslij.sh" "$POBRANE/obserwator/narzedzia/wyslij.sh" \
+    && sudo -u obserwator test -x "$LIB/obserwator/narzedzia/wyslij.sh"
 }
 
 porzadki_notatek_rowne_wzorowi() {
-  sudo -u obserwator cmp -s - "$OBS_DIR/narzedzia/porzadki-notatek.sh" \
-    < "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" \
-    && sudo -u obserwator test -x "$OBS_DIR/narzedzia/porzadki-notatek.sh"
+  plik_serwera "$LIB/obserwator/narzedzia/porzadki-notatek.sh" "$POBRANE/obserwator/narzedzia/porzadki-notatek.sh" \
+    && sudo -u obserwator test -x "$LIB/obserwator/narzedzia/porzadki-notatek.sh"
+}
+
+# obserwator_nie_zmienia_umowy: dodatni sygnał czterech warunków. Root kładzie w $LIB/obserwator plik próbny; konto
+# obserwator nie dopisuje do umowy ani do pliku próbnego, nie usuwa pliku próbnego i nie tworzy nowego pliku obok
+# umowy. Kod 0 tylko, gdy zachodzą wszystkie cztery; próby sprząta root.
+obserwator_nie_zmienia_umowy() {
+  local folder="$LIB/obserwator" wynik=0
+  local probny="$LIB/obserwator/.proba-roota-$$" nowy="$LIB/obserwator/.proba-obserwatora-$$"
+  [ -f "$folder/CLAUDE.md" ] || return 1
+  printf 'proba\n' > "$probny" || return 1
+  if sudo -u obserwator tee -a "$folder/CLAUDE.md" < /dev/null > /dev/null 2>&1; then
+    wynik=1
+  fi
+  if sudo -u obserwator tee -a "$probny" < /dev/null > /dev/null 2>&1; then
+    wynik=1
+  fi
+  sudo -u obserwator rm -f "$probny" 2> /dev/null || true
+  if [ ! -e "$probny" ]; then
+    wynik=1
+  fi
+  if sudo -u obserwator touch "$nowy" 2> /dev/null; then
+    wynik=1
+  fi
+  rm -f -- "$probny" "$nowy"
+  return "$wynik"
+}
+
+# obserwator_bez_skilli_autora: tryb użytkownika, dodatni sygnał; konto obserwator czyta swój folder skilli (albo
+# folder domowy, gdy folderu skilli nie ma), a w nim nie ma żadnego skilla z SKILLE_AUTORA.
+obserwator_bez_skilli_autora() {
+  local lista skill
+  if sudo -u obserwator test -d "$OBS_SKILLE"; then
+    lista=$(sudo -u obserwator find "$OBS_SKILLE" -mindepth 1 -maxdepth 1 -printf '%f\n') || return 1
+  else
+    sudo -u obserwator test -d "$OBS_HOME" || return 1
+    lista=""
+  fi
+  for skill in "${SKILLE_AUTORA[@]}"; do
+    if grep -qxF -- "$skill" <<< "$lista"; then
+      return 1
+    fi
+  done
 }
 
 # skill_obserwatora_rowny_wzorowi <nazwa>: skill obserwatora z SKILLE_OBSERWATORA ma treść pobranego wzoru.
@@ -1089,8 +1688,8 @@ umask_kont() {
 
 sprawdz "konto fabryka nie czyta i nie zmienia katalogu obserwatora" \
   "tryb 0700 katalogu $OBS_HOME (ls -ld $OBS_HOME)" fabryka_nie_widzi_obserwatora
-sprawdz "obserwator czyta pliki laboratorium i projektów" \
-  "tryb 0750 katalogu $FAB_HOME, grupę fabryka obserwatora (id obserwator) i folder $FAB_HOME/projekty" \
+sprawdz "obserwator czyta pliki Factory i projektów" \
+  "tryb 0750 katalogu $FAB_HOME, grupę fabryka obserwatora (id obserwator), plik $FOLDER_FABRYKI/CLAUDE.md i folder $FAB_HOME/projekty" \
   obserwator_czyta_laboratorium
 sprawdz "jedyna reguła sudo obserwatora to skrypt startowy fabryki" \
   "sudo -l -U obserwator i plik $SUDOERS_CEL" regula_sudo_obserwatora
@@ -1110,21 +1709,45 @@ sprawdz "mise dla konta fabryka ($MISE_WERSJA)" \
   "sudo -u fabryka mise --version i plik /usr/local/bin/mise" mise_w_wersji_instalatora
 sprawdz "gitleaks w wersji z szablonu CI ($GITLEAKS_WERSJA)" \
   "sudo -u fabryka gitleaks version i plik /usr/local/bin/gitleaks" gitleaks_w_wersji_szablonu
-sprawdz "laboratorium sklonowane" "folder $LAB_DIR" klon_laboratorium
-sprawdz "skille laboratorium w ~/.claude/skills konta fabryka równe klonowi" \
-  "foldery $LAB_DIR/skills i $FAB_SKILLE (uruchom instalator ponownie)" skille_fabryki_rowne_klonowi
-sprawdz "hak startu sesji w ustawieniach Claude Code konta fabryka" "plik $FAB_SETTINGS" hak_fabryki
-sprawdz "umowa obserwatora równa wzorowi" "plik $OBS_DIR/CLAUDE.md" umowa_rowna_wzorowi
-sprawdz "narzędzie wysyłania obserwatora równe wzorowi i wykonywalne" "plik $OBS_DIR/narzedzia/wyslij.sh" \
-  wyslij_rowny_wzorowi
+if [ "$TRYB" = autor ]; then
+  sprawdz "laboratorium sklonowane" "folder $LAB_DIR" klon_laboratorium
+  sprawdz "skille laboratorium w ~/.claude/skills konta fabryka równe klonowi" \
+    "foldery $LAB_DIR/skills i $FAB_SKILLE (uruchom instalator ponownie)" skille_fabryki_rowne_klonowi
+else
+  sprawdz "zestaw Factory w $ZESTAW równy wzorowi" "uruchom instalator ponownie (przywróci zestaw)" \
+    drzewo_rowne_wzorowi "$ZESTAW" zestaw
+  sprawdz "skille Factory w $ZARZADZANE równe wzorowi" "uruchom instalator ponownie (przywróci skille)" \
+    drzewo_rowne_wzorowi "$ZARZADZANE" zarzadzane
+  sprawdz "zestaw Factory i jego foldery nadrzędne należą do roota bez zapisu dla grupy i innych" \
+    "ls -ld $ZESTAW i find $ZESTAW ! -user root" root_bez_zapisu_innych "$ZESTAW"
+  sprawdz "skille Factory i ich foldery nadrzędne należą do roota bez zapisu dla grupy i innych" \
+    "ls -ld $ZARZADZANE i find $ZARZADZANE ! -user root" root_bez_zapisu_innych "$ZARZADZANE"
+  for konto in fabryka obserwator; do
+    sprawdz "konto $konto nie tworzy, nie zmienia i nie usuwa plików zestawu ani nie zmienia nazwy folderu skilla" \
+      "właściciel root i tryby $ZESTAW i $ZARZADZANE (ls -ld)" konto_nie_zmienia_zestawu "$konto"
+    sprawdz "konto $konto czyta zestaw Factory i skille Factory" \
+      "tryby $ZESTAW i $ZARZADZANE (ls -ld)" konto_czyta_zestaw "$konto"
+  done
+  sprawdz "w ~/.claude/skills obserwatora nie ma skilli autora (${SKILLE_AUTORA[*]})" \
+    "folder $OBS_SKILLE (sudo -u obserwator ls $OBS_SKILLE); uruchom instalator ponownie" obserwator_bez_skilli_autora
+fi
+sprawdz "hak startu sesji z $FOLDER_FABRYKI w ustawieniach Claude Code konta fabryka" "plik $FAB_SETTINGS" hak_fabryki
+sprawdz "umowa obserwatora równa wzorowi" "plik $LIB/obserwator/CLAUDE.md (ls -l)" \
+  umowa_rowna_wzorowi
+sprawdz "konto obserwator nie zmienia umowy" "właściciel root i tryby $LIB/obserwator (ls -ld)" \
+  obserwator_nie_zmienia_umowy
+sprawdz "narzędzie wysyłania obserwatora równe wzorowi i wykonywalne" \
+  "plik $LIB/obserwator/narzedzia/wyslij.sh (ls -l)" wyslij_rowny_wzorowi
 sprawdz "narzędzie sprawdzenia notatek obserwatora równe wzorowi i wykonywalne" \
-  "plik $OBS_DIR/narzedzia/porzadki-notatek.sh" porzadki_notatek_rowne_wzorowi
+  "plik $LIB/obserwator/narzedzia/porzadki-notatek.sh (ls -l)" porzadki_notatek_rowne_wzorowi
 sprawdz "folder archiwum notatek jest" "sudo -u obserwator ls -ld $ARCHIWUM_NOTATEK" \
   sudo -u obserwator test -d "$ARCHIWUM_NOTATEK"
-for skill in "${SKILLE_OBSERWATORA[@]}"; do
-  sprawdz "skill obserwatora $skill równy wzorowi" "plik $OBS_SKILLE/$skill/SKILL.md" \
-    skill_obserwatora_rowny_wzorowi "$skill"
-done
+if [ "$TRYB" = autor ]; then
+  for skill in "${SKILLE_OBSERWATORA[@]}"; do
+    sprawdz "skill obserwatora $skill równy wzorowi" "plik $OBS_SKILLE/$skill/SKILL.md" \
+      skill_obserwatora_rowny_wzorowi "$skill"
+  done
+fi
 sprawdz "ustawienia Claude Code obserwatora" "pliki $OBS_SETTINGS i $OBS_STAN" ustawienia_obserwatora
 sprawdz "usługa obserwator.service działa" "systemctl status obserwator.service" \
   systemctl is-active --quiet obserwator.service

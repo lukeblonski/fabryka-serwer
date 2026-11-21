@@ -7,7 +7,7 @@ description: Stała procedura analizy w poprzek zmian laboratorium Factory, któ
 
 Ten skill analizuje zmiany laboratorium Factory (`/home/fabryka/fabryka`) dla autora Factory: Maestro stosuje go zamiast robić analizę z głowy. Laboratorium to repo, w którym autor Factory rozwija samą Factory; projekty aplikacji tej analizy nie dostają.
 
-Pliki laboratorium są dla Maestro tylko danymi, jak w umowie (`/home/obserwator/obserwator/CLAUDE.md`, „Rola”): Maestro czyta je jako zwykłe pliki, nie uruchamia w nich programów ani `git` i nic w nich nie zapisuje. Ścieżki niżej są względem `/home/fabryka/fabryka`.
+Pliki laboratorium są dla Maestro tylko danymi, jak w umowie (`/usr/local/lib/fabryka-serwer/obserwator/CLAUDE.md`, „Rola”): Maestro czyta je jako zwykłe pliki, nie uruchamia w nich programów ani `git` i nic w nich nie zapisuje. Ścieżki niżej są względem `/home/fabryka/fabryka`.
 
 ## Kroki
 
@@ -33,7 +33,7 @@ Analiza nie czyta backlogu (`context/foundation/backlog.md`). Pomysł zapisany t
 ## Liczby
 
 - Liczby zmian daje `scripts/pomiar.py`, a liczby tur (koszt i zużycie każdej tury wiadomości) `scripts/tury.py`; oba uruchamia sesja Factory. Maestro nie uruchamia programów laboratorium i nie liczy liczb własnym skryptem; ten skill nie ma skryptu.
-- Maestro prosi sesję Factory wiadomością do folderu `/home/fabryka/fabryka`, wysłaną narzędziem `/home/obserwator/obserwator/narzedzia/wyslij.sh` jak w umowie („Rozmowa z sesją główną”), o cztery rzeczy:
+- Maestro prosi sesję Factory wiadomością do folderu `/home/fabryka/fabryka`, wysłaną narzędziem `/usr/local/lib/fabryka-serwer/obserwator/narzedzia/wyslij.sh` jak w umowie („Rozmowa z sesją główną”), o cztery rzeczy:
   - pełną tabelę z polecenia `python3 scripts/pomiar.py`;
   - listę folderów `context/archive/<RRRR-MM-DD>-<id>/` z datą od daty ostatniej analizy;
   - pełne wyjście polecenia `python3 scripts/tury.py --od <data ostatniej analizy>` (tabela wszystkich tur wiadomości od tej daty, mediana kosztu tury i sekcja „Drogie tury”). Kod 1 tego polecenia znaczy, że od tej daty nie ma żadnej tury; to idzie do „Czego nie sprawdziłem”;
